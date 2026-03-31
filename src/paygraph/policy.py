@@ -5,6 +5,20 @@ from datetime import date
 
 @dataclass
 class SpendPolicy:
+    """Configuration for spend governance rules.
+
+    Attributes:
+        max_transaction: Maximum dollar amount allowed per transaction.
+        daily_budget: Maximum total dollar amount allowed per calendar day.
+        allowed_vendors: If set, only vendors matching these names are
+            permitted (case-insensitive substring match).
+        blocked_vendors: If set, vendors matching these names are always
+            blocked (case-insensitive substring match).
+        allowed_mccs: Merchant Category Code allowlist (reserved for future use).
+        require_justification: Whether a justification string is required
+            for every spend request.
+    """
+
     max_transaction: float = 50.0
     daily_budget: float = 200.0
     allowed_vendors: list[str] | None = None
@@ -15,13 +29,33 @@ class SpendPolicy:
 
 @dataclass
 class PolicyResult:
+    """Result of a policy evaluation.
+
+    Attributes:
+        approved: Whether the spend request passed all policy checks.
+        denial_reason: Human-readable reason if the request was denied.
+        checks_passed: Names of policy checks that passed before denial
+            (or all checks if approved).
+    """
+
     approved: bool
     denial_reason: str | None = None
     checks_passed: list[str] = field(default_factory=list)
 
 
 class PolicyEngine:
+    """Stateful engine that evaluates spend requests against policy rules.
+
+    Tracks cumulative daily spend in memory. The daily counter resets
+    automatically at the start of each new calendar day.
+    """
+
     def __init__(self, policy: SpendPolicy) -> None:
+        """Initialize the engine with a spend policy.
+
+        Args:
+            policy: The ``SpendPolicy`` defining governance rules.
+        """
         self.policy = policy
         self._daily_spend: float = 0.0
         self._current_date: date = date.today()
@@ -39,6 +73,23 @@ class PolicyEngine:
         justification: str | None = None,
         on_check: Callable[[str, bool], None] | None = None,
     ) -> PolicyResult:
+        """Evaluate a spend request against all policy rules.
+
+        Checks are run in order: amount_cap, vendor_allowlist,
+        vendor_blocklist, mcc_filter, daily_budget, justification.
+        Evaluation stops at the first failure.
+
+        Args:
+            amount: Dollar amount of the spend request.
+            vendor: Name of the vendor or service.
+            justification: Reason for the spend (required if
+                ``policy.require_justification`` is True).
+            on_check: Optional callback invoked after each check with
+                ``(check_name, passed)``.
+
+        Returns:
+            A ``PolicyResult`` indicating approval or denial.
+        """
         self._reset_daily_if_needed()
         checks_passed: list[str] = []
 

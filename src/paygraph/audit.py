@@ -27,6 +27,21 @@ _CHECK_LABELS = {
 
 @dataclass
 class AuditRecord:
+    """Structured audit log entry for a spend request.
+
+    Attributes:
+        timestamp: ISO 8601 UTC timestamp of the request.
+        agent_id: Identifier of the agent that made the request.
+        amount: Dollar amount of the spend request.
+        vendor: Name of the vendor or service.
+        justification: Reason provided for the spend (may be None).
+        policy_result: ``"approved"`` or ``"denied"``.
+        denial_reason: Human-readable reason if denied, else None.
+        checks_passed: Names of policy checks that passed.
+        gateway_ref: Gateway reference ID (for approved requests).
+        gateway_type: Gateway type string (e.g. ``"mock"``, ``"stripe_test"``).
+    """
+
     timestamp: str
     agent_id: str
     amount: float
@@ -51,6 +66,22 @@ class AuditRecord:
         gateway_ref: str | None = None,
         gateway_type: str | None = None,
     ) -> "AuditRecord":
+        """Create an AuditRecord with the current UTC timestamp.
+
+        Args:
+            agent_id: Identifier of the agent.
+            amount: Dollar amount of the request.
+            vendor: Vendor name.
+            justification: Spend justification.
+            policy_result: ``"approved"`` or ``"denied"``.
+            denial_reason: Reason for denial, if applicable.
+            checks_passed: List of passed policy check names.
+            gateway_ref: Gateway reference ID.
+            gateway_type: Gateway type string.
+
+        Returns:
+            A new ``AuditRecord`` with ``timestamp`` set to now (UTC).
+        """
         return cls(
             timestamp=datetime.now(timezone.utc).isoformat(),
             agent_id=agent_id,
@@ -66,15 +97,40 @@ class AuditRecord:
 
 
 class AuditLogger:
+    """Writes structured JSONL audit trail with optional terminal output.
+
+    Each call to ``log()`` appends one JSON line to the log file and
+    optionally prints a formatted result to stdout.
+    """
+
     def __init__(
         self, log_path: str = "paygraph_audit.jsonl", verbose: bool = True, animate: bool = False,
     ) -> None:
+        """Initialize the audit logger.
+
+        Args:
+            log_path: File path for the JSONL audit log.
+            verbose: If True, print formatted results to stdout.
+            animate: If True, add a short delay between policy check
+                outputs for visual effect.
+        """
         self.log_path = log_path
         self.verbose = verbose
         self.animate = animate
 
     def start_request(self, amount: float, vendor: str) -> Callable[[str, bool], None]:
-        """Print request header and return a callback for live check output."""
+        """Print a formatted request header and return a live check callback.
+
+        The returned callback can be passed to ``PolicyEngine.evaluate()``
+        as ``on_check`` to display each policy check result in real time.
+
+        Args:
+            amount: Dollar amount of the request.
+            vendor: Vendor name.
+
+        Returns:
+            A callback ``(check_name: str, passed: bool) -> None``.
+        """
         print()
         print(f"  {_DIM}{'─' * 50}{_RESET}")
         print(f"  {_BOLD}Spend Request{_RESET}  ${amount:.2f} → {_CYAN}{vendor}{_RESET}")
@@ -97,6 +153,13 @@ class AuditLogger:
         return on_check
 
     def log(self, record: AuditRecord) -> None:
+        """Write an audit record to the JSONL log file.
+
+        If ``verbose`` is True, also prints a formatted result to stdout.
+
+        Args:
+            record: The ``AuditRecord`` to log.
+        """
         with open(self.log_path, "a") as f:
             f.write(json.dumps(asdict(record)) + "\n")
 

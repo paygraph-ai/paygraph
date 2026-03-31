@@ -11,6 +11,7 @@ dependencies = ["pydantic", "httpx"]
 langgraph = ["langchain-core>=0.2"]
 live = ["langgraph>=0.2", "langchain-anthropic>=0.2", "langchain-openai>=0.2"]
 x402 = ["x402[httpx,evm,svm]"]
+docs = ["mkdocs-material", "mkdocstrings[python]"]
 
 [project.scripts]
 paygraph = "paygraph.cli:main"

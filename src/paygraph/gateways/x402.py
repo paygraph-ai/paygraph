@@ -6,7 +6,20 @@ from dataclasses import dataclass
 
 @dataclass
 class X402Receipt:
-    """Result of a successful x402 payment."""
+    """Result of a successful x402 payment.
+
+    Attributes:
+        url: The x402-enabled endpoint URL that was called.
+        amount_cents: Amount paid in cents.
+        network: Blockchain network identifier (e.g. ``"eip155:8453"``).
+        transaction_hash: On-chain transaction hash.
+        payer: Wallet address of the payer.
+        gateway_ref: Unique reference (usually the transaction hash).
+        gateway_type: Always ``"x402"``.
+        status_code: HTTP status code of the response.
+        response_body: Body of the HTTP response from the paid endpoint.
+        content_type: Content-Type header of the response.
+    """
 
     url: str
     amount_cents: int
@@ -22,7 +35,16 @@ class X402Receipt:
 
 
 class X402Gateway:
-    """Gateway for x402 HTTP 402 payments. Supports EVM and/or Solana."""
+    """Gateway for x402 HTTP 402 payments using on-chain USDC.
+
+    Supports EVM chains (Base, Ethereum, etc.) and Solana. At least one
+    private key must be provided. The x402 SDK is imported lazily — it
+    only needs to be installed when this gateway is used.
+
+    Args:
+        evm_private_key: Hex-encoded EVM private key (e.g. ``"0x..."``).
+        svm_private_key: Base58-encoded Solana private key.
+    """
 
     def __init__(
         self,
@@ -126,7 +148,27 @@ class X402Gateway:
         headers: dict | None = None,
         body: str | None = None,
     ) -> X402Receipt:
-        """Make a paid HTTP request via x402 protocol (sync wrapper)."""
+        """Make a paid HTTP request via the x402 protocol.
+
+        Synchronous wrapper around the async x402 client. Sends the
+        request, handles the 402 payment challenge, and returns the
+        final response.
+
+        Args:
+            url: The x402-enabled endpoint URL.
+            amount_cents: Payment amount in cents.
+            vendor: Name of the vendor or service.
+            memo: Justification or memo for the payment.
+            method: HTTP method (default ``"GET"``).
+            headers: Optional additional HTTP headers.
+            body: Optional request body string.
+
+        Returns:
+            An ``X402Receipt`` with the response body and transaction details.
+
+        Raises:
+            RuntimeError: If the x402 payment fails (still 402 after retry).
+        """
         return asyncio.run(
             self._execute(url, amount_cents, vendor, memo, method, headers, body)
         )

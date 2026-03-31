@@ -7,6 +7,22 @@ from paygraph.policy import PolicyEngine, SpendPolicy
 
 
 class AgentWallet:
+    """Main entry point for PayGraph spend governance.
+
+    Orchestrates policy checks, gateway calls, and audit logging for both
+    virtual card and x402 payment flows.
+
+    Example:
+        ```python
+        from paygraph import AgentWallet, SpendPolicy
+
+        wallet = AgentWallet(
+            policy=SpendPolicy(max_transaction=25.0, daily_budget=100.0),
+        )
+        result = wallet.request_spend(4.20, "Anthropic API", "Need tokens")
+        ```
+    """
+
     def __init__(
         self,
         gateway=None,
@@ -17,6 +33,21 @@ class AgentWallet:
         verbose: bool = True,
         animate: bool = False,
     ) -> None:
+        """Initialize the wallet with a gateway, policy, and audit settings.
+
+        Args:
+            gateway: Card gateway implementing ``BaseGateway``. Defaults to
+                ``MockGateway()`` which prompts for human approval.
+            x402_gateway: Optional x402 gateway (``X402Gateway`` or
+                ``MockX402Gateway``) for HTTP 402 payments.
+            policy: Spend policy rules. Defaults to ``SpendPolicy()`` with
+                $50 max transaction and $200 daily budget.
+            agent_id: Identifier for this agent in audit logs.
+            log_path: File path for the JSONL audit log.
+            verbose: If True, print policy check results to stdout.
+            animate: If True, add a short delay between policy checks
+                for visual effect in demos.
+        """
         self.gateway = gateway or MockGateway()
         self.x402_gateway = x402_gateway
         self.policy_engine = PolicyEngine(policy or SpendPolicy())
@@ -24,6 +55,24 @@ class AgentWallet:
         self._audit = AuditLogger(log_path=log_path, verbose=verbose, animate=animate)
 
     def request_spend(self, amount: float, vendor: str, justification: str) -> str:
+        """Request a policy-checked virtual card spend.
+
+        Evaluates the spend against the configured policy, then calls the
+        card gateway to mint a virtual card if approved.
+
+        Args:
+            amount: Dollar amount to spend (e.g. 4.20 for $4.20).
+            vendor: Name of the vendor or service.
+            justification: Explanation of why this purchase is necessary.
+
+        Returns:
+            A string with the card details (PAN, CVV, expiry).
+
+        Raises:
+            PolicyViolationError: If the policy engine denies the request.
+            SpendDeniedError: If a human denies the request (MockGateway).
+            GatewayError: If the gateway API call fails.
+        """
         # Print header and run policy engine with live check output
         on_check = self._audit.start_request(amount, vendor) if self._audit.verbose else None
         result = self.policy_engine.evaluate(amount, vendor, justification, on_check=on_check)
@@ -94,6 +143,11 @@ class AgentWallet:
 
     @cached_property
     def spend_tool(self):
+        """LangChain-compatible tool for virtual card spends.
+
+        Returns a ``@tool``-decorated function usable in LangGraph agents.
+        Requires ``langchain-core``: install with ``pip install paygraph[langgraph]``.
+        """
         return self._build_spend_tool()
 
     def _build_spend_tool(self):
@@ -142,7 +196,22 @@ class AgentWallet:
     ) -> str:
         """Make a policy-checked x402 payment to a paid HTTP endpoint.
 
-        Returns the response body from the paid resource.
+        Args:
+            url: The x402-enabled API endpoint URL.
+            amount: Dollar amount for the request (e.g. 0.50 for $0.50).
+            vendor: Name of the service or vendor.
+            justification: Explanation of why this API call is necessary.
+            method: HTTP method (default ``"GET"``).
+            headers: Optional additional HTTP headers.
+            body: Optional request body string.
+
+        Returns:
+            The response body from the paid resource.
+
+        Raises:
+            GatewayError: If no x402 gateway is configured, or the payment fails.
+            PolicyViolationError: If the policy engine denies the request.
+            SpendDeniedError: If a human denies the request (MockX402Gateway).
         """
         if self.x402_gateway is None:
             raise GatewayError(
@@ -216,7 +285,11 @@ class AgentWallet:
 
     @cached_property
     def x402_tool(self):
-        """LangChain tool for x402 payments — available only when x402_gateway is set."""
+        """LangChain-compatible tool for x402 HTTP payments.
+
+        Returns a ``@tool``-decorated function usable in LangGraph agents.
+        Requires ``langchain-core`` and an ``x402_gateway`` to be configured.
+        """
         return self._build_x402_tool()
 
     def _build_x402_tool(self):

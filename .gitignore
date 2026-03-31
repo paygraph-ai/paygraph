@@ -30,5 +30,8 @@ Thumbs.db
 # Environment
 .env
 
+# Docs
+site/
+
 # PayGraph
 paygraph_audit.jsonl

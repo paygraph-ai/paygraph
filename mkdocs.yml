@@ -1,0 +1,71 @@
+site_name: PayGraph
+site_description: Open-source spend governance for AI agents
+site_url: https://allenbrd.github.io/paygraph
+repo_url: https://github.com/Allenbrd/paygraph
+repo_name: Allenbrd/paygraph
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            members_order: source
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Your First Policy: getting-started/first-policy.md
+  - Concepts:
+      - Policy Engine: concepts/policy.md
+      - Gateways: concepts/gateways.md
+      - Audit Logging: concepts/audit.md
+  - API Reference:
+      - AgentWallet: api/wallet.md
+      - SpendPolicy: api/policy.md
+      - PolicyEngine: api/policy-engine.md
+      - Gateways: api/gateways.md
+      - VirtualCard: api/virtual-card.md
+      - Exceptions: api/exceptions.md
+  - CLI: cli.md

@@ -14,7 +14,23 @@ _DEFAULT_BILLING = {
 
 
 class StripeCardGateway(BaseGateway):
-    """Stripe Issuing gateway for virtual cards."""
+    """Stripe Issuing gateway that creates real virtual cards.
+
+    Automatically detects test vs live mode from the API key prefix
+    (``sk_test_`` or ``sk_live_``). Creates or reuses a Stripe cardholder.
+
+    Args:
+        api_key: Stripe secret key (must start with ``sk_test_`` or ``sk_live_``).
+        cardholder_id: Existing Stripe cardholder ID to use. If None, one is
+            created or reused automatically.
+        currency: ISO currency code (default ``"usd"``).
+        billing_address: Cardholder billing address dict. Uses a San Francisco
+            default if not provided.
+        single_use: If True (default), a new card is created per transaction.
+            If False, reuses the same card and updates the spending limit.
+        allowed_mccs: Stripe MCC allowlist applied at the card level.
+        blocked_mccs: Stripe MCC blocklist applied at the card level.
+    """
 
     API_BASE = "https://api.stripe.com"
 
@@ -166,6 +182,22 @@ class StripeCardGateway(BaseGateway):
             raise GatewayError(f"Stripe API unreachable: {e}") from e
 
     def execute_spend(self, amount_cents: int, vendor: str, memo: str) -> VirtualCard:
+        """Create a Stripe Issuing virtual card with the given spend limit.
+
+        Calls the Stripe ``/v1/issuing/cards`` API to mint a new card
+        (or update the existing card's limit if ``single_use`` is False).
+
+        Args:
+            amount_cents: Spend limit in cents.
+            vendor: Name of the vendor (stored in card metadata).
+            memo: Justification (stored in card metadata, truncated to 500 chars).
+
+        Returns:
+            A ``VirtualCard`` with the real PAN, CVV, and expiry.
+
+        Raises:
+            GatewayError: If the Stripe API call fails.
+        """
         cardholder_id = self._ensure_cardholder()
 
         if self._single_use or self._card_cache is None:
@@ -189,6 +221,19 @@ class StripeCardGateway(BaseGateway):
         )
 
     def revoke(self, gateway_ref: str) -> bool:
+        """Cancel a Stripe Issuing card.
+
+        Sets the card status to ``"canceled"`` via the Stripe API.
+
+        Args:
+            gateway_ref: The Stripe card ID (``ic_...``).
+
+        Returns:
+            True if the card was canceled, False if not found (404).
+
+        Raises:
+            GatewayError: If the Stripe API call fails (non-404).
+        """
         try:
             resp = self._client.post(
                 f"/v1/issuing/cards/{gateway_ref}",

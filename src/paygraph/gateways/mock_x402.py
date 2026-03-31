@@ -5,7 +5,18 @@ from paygraph.gateways.x402 import X402Receipt
 
 
 class MockX402Gateway:
-    """Mock x402 gateway for testing — simulates the 402 flow without blockchain."""
+    """Mock x402 gateway for testing without blockchain access.
+
+    Simulates the x402 payment flow by generating fake transaction hashes
+    and returning configurable response bodies. Optionally prompts for
+    human approval.
+
+    Args:
+        auto_approve: If True, skip the terminal approval prompt.
+        response_body: Canned response body to return.
+        status_code: HTTP status code of the mock response.
+        content_type: Content-Type of the mock response.
+    """
 
     def __init__(
         self,
@@ -30,6 +41,24 @@ class MockX402Gateway:
         headers: dict | None = None,
         body: str | None = None,
     ) -> X402Receipt:
+        """Simulate an x402 payment, optionally prompting for approval.
+
+        Args:
+            url: The endpoint URL.
+            amount_cents: Payment amount in cents.
+            vendor: Name of the vendor.
+            memo: Justification for the payment.
+            method: HTTP method (ignored in mock).
+            headers: Optional headers (ignored in mock).
+            body: Optional body (ignored in mock).
+
+        Returns:
+            An ``X402Receipt`` with a fake transaction hash and the
+            configured response body.
+
+        Raises:
+            SpendDeniedError: If the human denies the approval prompt.
+        """
         amount_dollars = amount_cents / 100
         if not self.auto_approve:
             response = input(
