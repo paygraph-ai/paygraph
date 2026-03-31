@@ -1,0 +1,56 @@
+import secrets
+
+from paygraph.exceptions import SpendDeniedError
+from paygraph.gateways.x402 import X402Receipt
+
+
+class MockX402Gateway:
+    """Mock x402 gateway for testing — simulates the 402 flow without blockchain."""
+
+    def __init__(
+        self,
+        auto_approve: bool = False,
+        response_body: str = "{}",
+        status_code: int = 200,
+        content_type: str = "application/json",
+    ) -> None:
+        self.auto_approve = auto_approve
+        self.response_body = response_body
+        self.status_code = status_code
+        self.content_type = content_type
+        self._receipts: dict[str, X402Receipt] = {}
+
+    def execute_x402(
+        self,
+        url: str,
+        amount_cents: int,
+        vendor: str,
+        memo: str,
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str | None = None,
+    ) -> X402Receipt:
+        amount_dollars = amount_cents / 100
+        if not self.auto_approve:
+            response = input(
+                f"[PayGraph] Approve x402 payment ${amount_dollars:.2f} for {vendor}? [Y/n]: "
+            )
+            if response.strip().lower() not in ("", "y", "yes"):
+                raise SpendDeniedError(
+                    f"Human denied x402 payment of ${amount_dollars:.2f} for {vendor}"
+                )
+
+        tx_hash = f"0xmock_{secrets.token_hex(16)}"
+        receipt = X402Receipt(
+            url=url,
+            amount_cents=amount_cents,
+            network="eip155:8453",
+            transaction_hash=tx_hash,
+            payer="0xMockPayer1234567890abcdef",
+            gateway_ref=tx_hash,
+            status_code=self.status_code,
+            response_body=self.response_body,
+            content_type=self.content_type,
+        )
+        self._receipts[tx_hash] = receipt
+        return receipt

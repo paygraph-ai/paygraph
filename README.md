@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Allenbrd/paygraph/actions/workflows/test.yml/badge.svg)](https://github.com/Allenbrd/paygraph/actions/workflows/test.yml)
 
-**Open-source spend governance for AI agents.** Issue single-use virtual cards with policy enforcement, audit logging, and human-in-the-loop approval.
+**Open-source spend governance for AI agents.** Issue single-use virtual cards or pay x402-enabled APIs with USDC — with policy enforcement, audit logging, and human-in-the-loop approval.
 
 ## Architecture
 
@@ -10,18 +10,18 @@
  Agent (LangGraph / any framework)
    │
    ▼
- ┌─────────────────────────────┐
- │        AgentWallet           │
- │  ┌───────────┐ ┌──────────┐ │
- │  │  Policy    │ │  Audit   │ │
- │  │  Engine    │ │  Logger  │ │
- │  └─────┬─────┘ └────┬─────┘ │
- │        │             │       │
- │  ┌─────▼─────────────▼─────┐ │
- │  │      BaseGateway        │ │
- │  │  MockGateway │ Stripe   │ │
- │  └─────────────────────────┘ │
- └─────────────────────────────┘
+ ┌──────────────────────────────────────────┐
+ │              AgentWallet                 │
+ │  ┌───────────────┐  ┌────────────────┐  │
+ │  │ Policy Engine  │  │  Audit Logger  │  │
+ │  └───────┬───────┘  └───────┬────────┘  │
+ │          │                  │            │
+ │  ┌───────▼──────────────────▼────────┐  │
+ │  │           Payment Rails           │  │
+ │  │  Card: Mock │ Stripe              │  │
+ │  │  x402: X402Gateway │ MockX402     │  │
+ │  └──────────────────────────────────┘  │
+ └──────────────────────────────────────────┘
 ```
 
 ## Install
@@ -34,6 +34,12 @@ With LangGraph support:
 
 ```bash
 pip install paygraph[langgraph]
+```
+
+With x402 support (EVM + Solana USDC payments):
+
+```bash
+pip install paygraph[x402]
 ```
 
 With live demo (includes LLM providers):
@@ -95,24 +101,66 @@ result = wallet.request_spend(
 
 When `single_use=False`, a single card is created on the first spend and reused for subsequent calls (spending limit is updated each time).
 
+## x402 Gateway (Pay APIs with USDC)
+
+x402 is an HTTP 402-based protocol for machine-to-machine payments. Instead of minting a card, the gateway makes an HTTP request, handles the 402→sign→retry cycle on-chain, and returns the API response.
+
+```python
+from paygraph import AgentWallet, X402Gateway, SpendPolicy
+
+wallet = AgentWallet(
+    x402_gateway=X402Gateway(evm_private_key="0x..."),  # Base/Polygon USDC
+    policy=SpendPolicy(max_transaction=5.0),
+)
+
+response = wallet.request_x402(
+    url="https://api.example.com/paid-endpoint",
+    amount=0.01,
+    vendor="ExampleAPI",
+    justification="Need data for analysis.",
+)
+print(response)  # The API response body
+```
+
+Supports both EVM (Base, Polygon, etc.) and Solana:
+
+```python
+# Solana only
+gateway = X402Gateway(svm_private_key="BASE58_KEY")
+
+# Both networks
+gateway = X402Gateway(evm_private_key="0x...", svm_private_key="BASE58_KEY")
+```
+
+For testing without blockchain:
+
+```python
+from paygraph import AgentWallet, MockX402Gateway
+
+wallet = AgentWallet(
+    x402_gateway=MockX402Gateway(auto_approve=True, response_body='{"data": 42}'),
+)
+```
+
 ## LangGraph Integration
 
 ```python
-from paygraph import AgentWallet, SpendPolicy
+from paygraph import AgentWallet, SpendPolicy, MockX402Gateway
 
 wallet = AgentWallet(
+    x402_gateway=MockX402Gateway(auto_approve=True),
     policy=SpendPolicy(max_transaction=25.0, blocked_vendors=["doordash"]),
 )
 
-# wallet.spend_tool is a LangChain-compatible tool
-tool = wallet.spend_tool
+# wallet.spend_tool → card payments, wallet.x402_tool → x402 API payments
+tools = [wallet.spend_tool, wallet.x402_tool]
 
 # Use with LangGraph
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
 
 llm = ChatAnthropic(model="claude-sonnet-4-20250514")
-agent = create_react_agent(llm, tools=[tool])
+agent = create_react_agent(llm, tools=tools)
 result = agent.invoke({"messages": [("user", "Buy $4.20 in API credits from Anthropic")]})
 ```
 
@@ -139,6 +187,8 @@ result = agent.invoke({"messages": [("user", "Buy $4.20 in API credits from Anth
 | `STRIPE_CURRENCY`       | `--stripe` (optional)   | Card currency (default: `usd`)               |
 | `STRIPE_BILLING_COUNTRY`| `--stripe` (optional)   | Billing address country code (e.g. `FR`)     |
 | `STRIPE_CARDHOLDER_ID`  | `--stripe` (optional)   | Reuse an existing cardholder ID              |
+| `EVM_PRIVATE_KEY`       | x402 (EVM)              | EVM private key for Base/Polygon USDC payments |
+| `SVM_PRIVATE_KEY`       | x402 (Solana)           | Solana private key (base58) for USDC payments |
 
 Copy `.env.example` to `.env` and fill in your keys:
 
