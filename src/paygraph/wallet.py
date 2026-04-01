@@ -284,6 +284,44 @@ class AgentWallet:
         return receipt.response_body
 
     @cached_property
+    def crewai_tool(self):
+        """CrewAI-compatible tool for virtual card spends.
+
+        CrewAI natively accepts LangChain tools, so this wraps ``spend_tool``
+        and returns it as a CrewAI ``Tool`` instance for a cleaner integration
+        experience.
+
+        Requires ``crewai`` and ``langchain-core``:
+        install with ``pip install paygraph[crewai]``.
+
+        Example::
+
+            from crewai import Agent, Task, Crew
+            from paygraph import AgentWallet
+
+            wallet = AgentWallet()
+            agent = Agent(
+                role="Purchasing Agent",
+                goal="Buy things",
+                tools=[wallet.crewai_tool],
+            )
+        """
+        try:
+            from crewai.tools import Tool  # type: ignore[import]
+        except ImportError:
+            raise ImportError(
+                "CrewAI integration requires crewai. "
+                "Install it with: pip install paygraph[crewai]"
+            )
+
+        lc_tool = self.spend_tool
+        return Tool(
+            name=lc_tool.name,
+            description=lc_tool.description,
+            func=lc_tool.run,
+        )
+
+    @cached_property
     def x402_tool(self):
         """LangChain-compatible tool for x402 HTTP payments.
 
