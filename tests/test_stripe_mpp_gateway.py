@@ -68,6 +68,17 @@ class TestKeyDetection:
                 grantee="",
             )
 
+    @patch("paygraph.gateways.stripe_mpp.httpx.Client")
+    def test_expires_in_seconds_must_be_positive(self, mock_client_cls):
+        for bad in (0, -1):
+            with pytest.raises(GatewayError, match="expires_in_seconds"):
+                StripeMPPGateway(
+                    api_key="sk_test_x",
+                    payment_method="pm_x",
+                    grantee="profile_x",
+                    expires_in_seconds=bad,
+                )
+
 
 class TestExecuteSpend:
     @patch("paygraph.gateways.stripe_mpp.httpx.Client")

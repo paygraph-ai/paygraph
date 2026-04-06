@@ -42,7 +42,7 @@ class StripeMPPGateway(BaseGateway):
         grantee: Seller identifier — typically a Stripe Profile ``profile_...``
             (live). The preview API may accept other grantee forms; see Stripe docs.
         currency: ISO currency code (default ``\"usd\"``).
-        expires_in_seconds: Token lifetime from issuance (Unix ``expires_at``).
+        expires_in_seconds: Token lifetime from issuance in seconds; must be > 0.
 
     Note:
         Machine payments may require account enablement:
@@ -79,6 +79,8 @@ class StripeMPPGateway(BaseGateway):
             )
         if not grantee:
             raise GatewayError("grantee must be non-empty (e.g. profile_...)")
+        if expires_in_seconds <= 0:
+            raise GatewayError("expires_in_seconds must be a positive integer")
 
         self._client = httpx.Client(
             base_url=self.API_BASE,
@@ -94,7 +96,10 @@ class StripeMPPGateway(BaseGateway):
         self._expires_in_seconds = expires_in_seconds
 
     def execute_spend(self, amount_cents: int, vendor: str, memo: str) -> VirtualCard:
-        """Issue an SPT with usage limits matching this spend request."""
+        """Issue an SPT with usage limits matching this spend request.
+
+        Metadata truncation matches ``StripeCardGateway`` (vendor 100 chars, memo 500).
+        """
         expires_at = int(time.time()) + self._expires_in_seconds
         data: dict[str, str] = {
             "payment_method": self._payment_method,
