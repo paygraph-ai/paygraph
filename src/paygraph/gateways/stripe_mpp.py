@@ -30,6 +30,17 @@ def _deactivate_path(token_id: str) -> str:
     return f"/v1/shared_payment/issued_tokens/{token_id}/deactivate"
 
 
+def _status_error_message(exc: httpx.HTTPStatusError) -> str:
+    """Extract Stripe error text safely for non-JSON responses."""
+    try:
+        payload = exc.response.json()
+        if isinstance(payload, dict):
+            return payload.get("error", {}).get("message", str(exc))
+    except Exception:
+        pass
+    return str(exc)
+
+
 class StripeMPPGateway(BaseGateway):
     """Issue Stripe Shared Payment Tokens (SPTs) instead of virtual cards.
 
@@ -117,7 +128,7 @@ class StripeMPPGateway(BaseGateway):
             resp = self._client.post(_ISSUE_PATH, data=data)
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            msg = e.response.json().get("error", {}).get("message", str(e))
+            msg = _status_error_message(e)
             raise GatewayError(f"Stripe API error: {msg}") from e
         except httpx.HTTPError as e:
             raise GatewayError(f"Stripe API unreachable: {e}") from e
@@ -146,7 +157,7 @@ class StripeMPPGateway(BaseGateway):
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return False
-            msg = e.response.json().get("error", {}).get("message", str(e))
+            msg = _status_error_message(e)
             raise GatewayError(f"Stripe API error: {msg}") from e
         except httpx.HTTPError as e:
             raise GatewayError(f"Stripe API unreachable: {e}") from e

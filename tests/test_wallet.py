@@ -51,6 +51,25 @@ class TestApprovedSpend:
         assert records[0]["gateway_ref"] is not None
         assert records[0]["gateway_type"] == "mock"
 
+    def test_returns_spt_token_string_for_mpp_gateway(self):
+        class MppGateway(BaseGateway):
+            def execute_spend(self, amount_cents, vendor, memo):
+                return VirtualCard(
+                    pan="SPT_NO_PAN",
+                    cvv="N/A",
+                    expiry="--/--",
+                    spend_limit_cents=amount_cents,
+                    gateway_ref="spt_test_abc123",
+                    gateway_type="stripe_mpp_test",
+                )
+
+            def revoke(self, gateway_ref):
+                return True
+
+        wallet, _ = _make_wallet(gateway=MppGateway())
+        result = wallet.request_spend(4.20, "Anthropic", "need credits")
+        assert result == "SPT approved. Token: spt_test_abc123 (spend limit: $4.20)"
+
 
 class TestPolicyDenial:
     def test_raises_policy_violation(self):

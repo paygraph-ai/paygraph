@@ -159,7 +159,7 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
             billing_address=billing_address,
             cardholder_id=cardholder_id,
         )
-        gateway_label = f"StripeCardGateway ({gateway._gateway_type.split('_')[1]})"
+        gateway_label = f"StripeCardGateway ({gateway._gateway_type.rsplit('_', 1)[-1]})"
     elif stripe_mpp:
         from paygraph.gateways.stripe_mpp import StripeMPPGateway
 
@@ -202,7 +202,7 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
             currency=currency,
             expires_in_seconds=expires_in_seconds,
         )
-        gateway_label = f"StripeMPPGateway ({gateway._gateway_type.split('_')[2]})"
+        gateway_label = f"StripeMPPGateway ({gateway._gateway_type.rsplit('_', 1)[-1]})"
     else:
         gateway = MockGateway(auto_approve=True)
         gateway_label = "MockGateway"
@@ -338,6 +338,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "demo":
+        if (args.stripe or args.stripe_mpp) and not args.live:
+            print("ERROR: --stripe and --stripe-mpp require --live.")
+            raise SystemExit(1)
         if args.live:
             run_live_demo(args.model, stripe=args.stripe, stripe_mpp=args.stripe_mpp)
         else:

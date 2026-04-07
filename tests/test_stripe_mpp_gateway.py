@@ -94,7 +94,8 @@ class TestExecuteSpend:
             currency="usd",
             expires_in_seconds=7200,
         )
-        card = gw.execute_spend(420, "Anthropic", "API credits")
+        with patch("paygraph.gateways.stripe_mpp.time.time", return_value=1_700_000_000):
+            card = gw.execute_spend(420, "Anthropic", "API credits")
 
         assert card.pan == "SPT_NO_PAN"
         assert card.cvv == "N/A"
@@ -111,7 +112,7 @@ class TestExecuteSpend:
         assert data["grantee"] == "profile_123live"
         assert data["usage_limits[currency]"] == "usd"
         assert data["usage_limits[max_amount]"] == "420"
-        assert int(data["usage_limits[expires_at]"]) > 0
+        assert data["usage_limits[expires_at]"] == str(1_700_000_000 + 7200)
         assert data["metadata[vendor]"] == "Anthropic"
         assert data["metadata[memo]"] == "API credits"
 
@@ -153,6 +154,22 @@ class TestExecuteSpend:
             gw.execute_spend(100, "v", "m")
 
     @patch("paygraph.gateways.stripe_mpp.httpx.Client")
+    def test_http_error_with_non_json_body(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        response = _mock_response(400)
+        response.json.side_effect = ValueError("not json")
+        mock_client.post.return_value = response
+
+        gw = StripeMPPGateway(
+            api_key="sk_test_xxx",
+            payment_method="pm_x",
+            grantee="profile_x",
+        )
+        with pytest.raises(GatewayError, match="Stripe API error:"):
+            gw.execute_spend(100, "v", "m")
+
+    @patch("paygraph.gateways.stripe_mpp.httpx.Client")
     def test_missing_id_in_response(self, mock_client_cls):
         mock_client = MagicMock()
         mock_client_cls.return_value = mock_client
@@ -179,6 +196,22 @@ class TestExecuteSpend:
         )
         with pytest.raises(GatewayError, match="Stripe API unreachable"):
             gw.execute_spend(100, "v", "m")
+
+    @patch("paygraph.gateways.stripe_mpp.httpx.Client")
+    def test_omits_empty_vendor_and_memo_metadata(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.post.return_value = _mock_response(200, _TOKEN_JSON)
+
+        gw = StripeMPPGateway(
+            api_key="sk_test_xxx",
+            payment_method="pm_x",
+            grantee="profile_x",
+        )
+        gw.execute_spend(100, "", "")
+        data = mock_client.post.call_args[1]["data"]
+        assert "metadata[vendor]" not in data
+        assert "metadata[memo]" not in data
 
 
 class TestRevoke:
@@ -221,4 +254,20 @@ class TestRevoke:
             grantee="profile_x",
         )
         with pytest.raises(GatewayError, match="Stripe API error"):
+            gw.revoke("spt_x")
+
+    @patch("paygraph.gateways.stripe_mpp.httpx.Client")
+    def test_non_json_error_response_raises_gateway_error(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        response = _mock_response(500)
+        response.json.side_effect = ValueError("not json")
+        mock_client.post.return_value = response
+
+        gw = StripeMPPGateway(
+            api_key="sk_test_xxx",
+            payment_method="pm_x",
+            grantee="profile_x",
+        )
+        with pytest.raises(GatewayError, match="Stripe API error:"):
             gw.revoke("spt_x")
