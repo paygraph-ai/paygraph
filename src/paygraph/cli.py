@@ -92,7 +92,7 @@ wallet = AgentWallet(
     print()
 
 
-def run_live_demo(model: str, stripe: bool = False) -> None:
+def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) -> None:
     """Run a live LangGraph agent demo with a real LLM."""
     # Deferred imports — only needed for --live
     try:
@@ -131,6 +131,10 @@ def run_live_demo(model: str, stripe: bool = False) -> None:
         raise SystemExit(1)
 
     # Resolve gateway
+    if stripe and stripe_mpp:
+        print("ERROR: Use only one of --stripe or --stripe-mpp.")
+        raise SystemExit(1)
+
     if stripe:
         from paygraph.gateways.stripe import StripeCardGateway
 
@@ -155,7 +159,50 @@ def run_live_demo(model: str, stripe: bool = False) -> None:
             billing_address=billing_address,
             cardholder_id=cardholder_id,
         )
-        gateway_label = f"StripeCardGateway ({gateway._gateway_type.split('_')[1]})"
+        gateway_label = f"StripeCardGateway ({gateway._gateway_type.rsplit('_', 1)[-1]})"
+    elif stripe_mpp:
+        from paygraph.gateways.stripe_mpp import StripeMPPGateway
+
+        stripe_key = os.environ.get("STRIPE_API_KEY")
+        payment_method = os.environ.get("STRIPE_MPP_PAYMENT_METHOD")
+        grantee = os.environ.get("STRIPE_MPP_GRANTEE")
+        if not stripe_key:
+            print(
+                "ERROR: STRIPE_API_KEY environment variable is not set.\n"
+                "Export it with: export STRIPE_API_KEY=sk_test_..."
+            )
+            raise SystemExit(1)
+        if not payment_method:
+            print(
+                "ERROR: STRIPE_MPP_PAYMENT_METHOD is not set.\n"
+                "Export it with: export STRIPE_MPP_PAYMENT_METHOD=pm_..."
+            )
+            raise SystemExit(1)
+        if not grantee:
+            print(
+                "ERROR: STRIPE_MPP_GRANTEE is not set.\n"
+                "Export it with: export STRIPE_MPP_GRANTEE=profile_..."
+            )
+            raise SystemExit(1)
+        currency = os.environ.get("STRIPE_CURRENCY", "usd")
+        expires_env = os.environ.get("STRIPE_MPP_EXPIRES_IN_SECONDS", "3600")
+        try:
+            expires_in_seconds = int(expires_env)
+        except ValueError:
+            print(
+                "ERROR: STRIPE_MPP_EXPIRES_IN_SECONDS must be an integer.\n"
+                "Example: export STRIPE_MPP_EXPIRES_IN_SECONDS=600"
+            )
+            raise SystemExit(1)
+
+        gateway = StripeMPPGateway(
+            api_key=stripe_key,
+            payment_method=payment_method,
+            grantee=grantee,
+            currency=currency,
+            expires_in_seconds=expires_in_seconds,
+        )
+        gateway_label = f"StripeMPPGateway ({gateway._gateway_type.rsplit('_', 1)[-1]})"
     else:
         gateway = MockGateway(auto_approve=True)
         gateway_label = "MockGateway"
@@ -279,12 +326,23 @@ def main() -> None:
         action="store_true",
         help="Use Stripe Issuing gateway instead of MockGateway (requires STRIPE_API_KEY)",
     )
+    demo_parser.add_argument(
+        "--stripe-mpp",
+        action="store_true",
+        help=(
+            "Use Stripe MPP gateway instead of MockGateway "
+            "(requires STRIPE_API_KEY, STRIPE_MPP_PAYMENT_METHOD, STRIPE_MPP_GRANTEE)"
+        ),
+    )
 
     args = parser.parse_args()
 
     if args.command == "demo":
+        if (args.stripe or args.stripe_mpp) and not args.live:
+            print("ERROR: --stripe and --stripe-mpp require --live.")
+            raise SystemExit(1)
         if args.live:
-            run_live_demo(args.model, stripe=args.stripe)
+            run_live_demo(args.model, stripe=args.stripe, stripe_mpp=args.stripe_mpp)
         else:
             run_demo()
     else:

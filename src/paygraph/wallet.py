@@ -66,7 +66,8 @@ class AgentWallet:
             justification: Explanation of why this purchase is necessary.
 
         Returns:
-            A string with the card details (PAN, CVV, expiry).
+            For most gateways, a string with card details (PAN, CVV, expiry).
+            For ``stripe_mpp_*`` gateways, a string with the SPT id and spend limit.
 
         Raises:
             PolicyViolationError: If the policy engine denies the request.
@@ -135,6 +136,12 @@ class AgentWallet:
                 gateway_type=card.gateway_type,
             )
         )
+
+        if card.gateway_type.startswith("stripe_mpp"):
+            return (
+                f"SPT approved. Token: {card.gateway_ref} "
+                f"(spend limit: ${amount:.2f})"
+            )
 
         return (
             f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, "

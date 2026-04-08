@@ -183,10 +183,13 @@ result = agent.invoke({"messages": [("user", "Buy $4.20 in API credits from Anth
 |-------------------------|-------------------------|----------------------------------------------|
 | `ANTHROPIC_API_KEY`     | `--live` (default)      | Anthropic API key for Claude LLM             |
 | `OPENAI_API_KEY`        | `--live --model openai` | OpenAI API key for GPT LLM                  |
-| `STRIPE_API_KEY`        | `--stripe`              | Stripe secret key (`sk_test_` or `sk_live_`) |
-| `STRIPE_CURRENCY`       | `--stripe` (optional)   | Card currency (default: `usd`)               |
-| `STRIPE_BILLING_COUNTRY`| `--stripe` (optional)   | Billing address country code (e.g. `FR`)     |
-| `STRIPE_CARDHOLDER_ID`  | `--stripe` (optional)   | Reuse an existing cardholder ID              |
+| `STRIPE_API_KEY`        | `--stripe` or `--stripe-mpp` | Stripe secret key (`sk_test_` or `sk_live_`) |
+| `STRIPE_CURRENCY`       | Stripe gateways (optional)   | Currency for Stripe card/SPT limits (default: `usd`) |
+| `STRIPE_BILLING_COUNTRY`| `--stripe` (optional)        | Billing address country code (e.g. `FR`)     |
+| `STRIPE_CARDHOLDER_ID`  | `--stripe` (optional)        | Reuse an existing cardholder ID              |
+| `STRIPE_MPP_PAYMENT_METHOD` | `--stripe-mpp`          | Stripe PaymentMethod id (`pm_...`) used to issue SPTs |
+| `STRIPE_MPP_GRANTEE`    | `--stripe-mpp`               | Seller grantee id (typically `profile_...`)  |
+| `STRIPE_MPP_EXPIRES_IN_SECONDS` | `--stripe-mpp` (optional) | SPT lifetime in seconds (default: `3600`) |
 | `EVM_PRIVATE_KEY`       | x402 (EVM)              | EVM private key for Base/Polygon USDC payments |
 | `SVM_PRIVATE_KEY`       | x402 (Solana)           | Solana private key (base58) for USDC payments |
 
@@ -213,6 +216,12 @@ paygraph demo --live --model openai
 # Use Stripe Issuing for real card issuance
 export STRIPE_API_KEY=sk_test_...
 paygraph demo --live --stripe
+
+# Use Stripe MPP (Shared Payment Tokens)
+export STRIPE_API_KEY=sk_test_...
+export STRIPE_MPP_PAYMENT_METHOD=pm_...
+export STRIPE_MPP_GRANTEE=profile_...
+paygraph demo --live --stripe-mpp
 ```
 
 ## License
