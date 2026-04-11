@@ -143,7 +143,16 @@ class PolicyEngine:
             return _fail("justification", "Justification is required but was not provided")
         _pass("justification")
 
-        # Approved — increment daily spend
-        self._daily_spend += amount
-
         return PolicyResult(approved=True, checks_passed=checks_passed)
+
+    def commit_spend(self, amount: float) -> None:
+        """Permanently record a spend against the daily budget.
+
+        Must be called only after a successful gateway transaction so that a
+        gateway failure does not silently consume the agent's daily budget.
+
+        Args:
+            amount: Dollar amount that was successfully spent.
+        """
+        self._reset_daily_if_needed()
+        self._daily_spend += amount

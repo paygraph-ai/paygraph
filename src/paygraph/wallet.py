@@ -92,7 +92,7 @@ class AgentWallet:
             )
             raise PolicyViolationError(result.denial_reason)
 
-        # Mint card
+        # Mint card — commit the budget only after the gateway succeeds
         amount_cents = int(round(amount * 100))
         try:
             card = self.gateway.execute_spend(amount_cents, vendor, justification)
@@ -122,6 +122,9 @@ class AgentWallet:
                 )
             )
             raise GatewayError(str(e)) from e
+
+        # Gateway succeeded — now it is safe to commit the spend to the budget
+        self.policy_engine.commit_spend(amount)
 
         # Log approval
         self._audit.log(
@@ -274,6 +277,9 @@ class AgentWallet:
                 )
             )
             raise GatewayError(str(e)) from e
+
+        # Gateway succeeded — now it is safe to commit the spend to the budget
+        self.policy_engine.commit_spend(amount)
 
         self._audit.log(
             AuditRecord.now(
