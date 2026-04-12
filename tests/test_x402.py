@@ -84,16 +84,12 @@ class TestRequestX402PolicyDenial:
     def test_raises_policy_violation(self):
         wallet, _ = _make_wallet(policy=SpendPolicy(max_transaction=5.0))
         with pytest.raises(PolicyViolationError, match="exceeds limit"):
-            wallet.request_x402(
-                "https://api.example.com", 100.0, "vendor", "reason"
-            )
+            wallet.request_x402("https://api.example.com", 100.0, "vendor", "reason")
 
     def test_audit_records_denial(self):
         wallet, path = _make_wallet(policy=SpendPolicy(max_transaction=5.0))
         with pytest.raises(PolicyViolationError):
-            wallet.request_x402(
-                "https://api.example.com", 100.0, "vendor", "reason"
-            )
+            wallet.request_x402("https://api.example.com", 100.0, "vendor", "reason")
         records = _read_audit(path)
         assert len(records) == 1
         assert records[0]["policy_result"] == "denied"
@@ -138,7 +134,9 @@ class TestRequestX402NoGateway:
         f = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
         f.close()
         wallet = AgentWallet(
-            policy=SpendPolicy(), log_path=f.name, verbose=False,
+            policy=SpendPolicy(),
+            log_path=f.name,
+            verbose=False,
         )
         with pytest.raises(GatewayError, match="No x402 gateway configured"):
             wallet.request_x402("https://api.example.com", 4.20, "vendor", "reason")
@@ -146,7 +144,9 @@ class TestRequestX402NoGateway:
 
 class TestRequestX402BudgetTracking:
     def test_daily_budget_tracked(self):
-        wallet, _ = _make_wallet(policy=SpendPolicy(daily_budget=10.0, max_transaction=50.0))
+        wallet, _ = _make_wallet(
+            policy=SpendPolicy(daily_budget=10.0, max_transaction=50.0)
+        )
         wallet.request_x402("https://api.example.com", 6.0, "vendor", "reason")
         wallet.request_x402("https://api.example.com", 3.0, "vendor", "reason")
         with pytest.raises(PolicyViolationError, match="Daily budget"):

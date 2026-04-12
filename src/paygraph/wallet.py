@@ -75,8 +75,12 @@ class AgentWallet:
             GatewayError: If the gateway API call fails.
         """
         # Print header and run policy engine with live check output
-        on_check = self._audit.start_request(amount, vendor) if self._audit.verbose else None
-        result = self.policy_engine.evaluate(amount, vendor, justification, on_check=on_check)
+        on_check = (
+            self._audit.start_request(amount, vendor) if self._audit.verbose else None
+        )
+        result = self.policy_engine.evaluate(
+            amount, vendor, justification, on_check=on_check
+        )
 
         if not result.approved:
             self._audit.log(
@@ -139,14 +143,10 @@ class AgentWallet:
 
         if card.gateway_type.startswith("stripe_mpp"):
             return (
-                f"SPT approved. Token: {card.gateway_ref} "
-                f"(spend limit: ${amount:.2f})"
+                f"SPT approved. Token: {card.gateway_ref} (spend limit: ${amount:.2f})"
             )
 
-        return (
-            f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, "
-            f"Expiry: {card.expiry}"
-        )
+        return f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, Expiry: {card.expiry}"
 
     @cached_property
     def spend_tool(self):
@@ -225,8 +225,12 @@ class AgentWallet:
                 "No x402 gateway configured. Pass x402_gateway to AgentWallet."
             )
 
-        on_check = self._audit.start_request(amount, vendor) if self._audit.verbose else None
-        result = self.policy_engine.evaluate(amount, vendor, justification, on_check=on_check)
+        on_check = (
+            self._audit.start_request(amount, vendor) if self._audit.verbose else None
+        )
+        result = self.policy_engine.evaluate(
+            amount, vendor, justification, on_check=on_check
+        )
 
         if not result.approved:
             self._audit.log(
@@ -245,8 +249,13 @@ class AgentWallet:
         amount_cents = int(round(amount * 100))
         try:
             receipt = self.x402_gateway.execute_x402(
-                url, amount_cents, vendor, justification,
-                method=method, headers=headers, body=body,
+                url,
+                amount_cents,
+                vendor,
+                justification,
+                method=method,
+                headers=headers,
+                body=body,
             )
         except SpendDeniedError:
             self._audit.log(
@@ -359,11 +368,17 @@ class AgentWallet:
 
         @tool("x402_pay", args_schema=X402SpendRequest)
         def x402_pay(
-            url: str, amount: float, vendor: str, justification: str, method: str = "GET",
+            url: str,
+            amount: float,
+            vendor: str,
+            justification: str,
+            method: str = "GET",
         ) -> str:
             """Use this tool to pay for an x402-enabled API endpoint. Provide the URL, dollar amount, vendor name, justification, and HTTP method."""
             try:
-                return wallet.request_x402(url, amount, vendor, justification, method=method)
+                return wallet.request_x402(
+                    url, amount, vendor, justification, method=method
+                )
             except (PolicyViolationError, SpendDeniedError, GatewayError) as e:
                 return f"x402 payment denied: {e}"
 

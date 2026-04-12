@@ -2,7 +2,7 @@ import json
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 _DIM = "\033[2m"
@@ -104,7 +104,10 @@ class AuditLogger:
     """
 
     def __init__(
-        self, log_path: str = "paygraph_audit.jsonl", verbose: bool = True, animate: bool = False,
+        self,
+        log_path: str = "paygraph_audit.jsonl",
+        verbose: bool = True,
+        animate: bool = False,
     ) -> None:
         """Initialize the audit logger.
 
@@ -133,7 +136,9 @@ class AuditLogger:
         """
         print()
         print(f"  {_DIM}{'─' * 50}{_RESET}")
-        print(f"  {_BOLD}Spend Request{_RESET}  ${amount:.2f} → {_CYAN}{vendor}{_RESET}")
+        print(
+            f"  {_BOLD}Spend Request{_RESET}  ${amount:.2f} → {_CYAN}{vendor}{_RESET}"
+        )
         print(f"  {_DIM}{'─' * 50}{_RESET}")
         print()
         sys.stdout.flush()

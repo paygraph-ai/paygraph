@@ -52,7 +52,9 @@ class X402Gateway:
         svm_private_key: str | None = None,
     ) -> None:
         if not evm_private_key and not svm_private_key:
-            raise ValueError("At least one of evm_private_key or svm_private_key is required")
+            raise ValueError(
+                "At least one of evm_private_key or svm_private_key is required"
+            )
 
         try:
             from x402 import x402Client
@@ -121,7 +123,9 @@ class X402Gateway:
             if payment_header:
                 try:
                     settle = json.loads(base64.b64decode(payment_header))
-                    tx_hash = settle.get("transaction", "") or settle.get("transactionId", "")
+                    tx_hash = settle.get("transaction", "") or settle.get(
+                        "transactionId", ""
+                    )
                     network = settle.get("network", "")
                 except Exception:
                     pass

@@ -1,7 +1,7 @@
-from unittest.mock import patch
 from datetime import date
+from unittest.mock import patch
 
-from paygraph.policy import SpendPolicy, PolicyEngine
+from paygraph.policy import PolicyEngine, SpendPolicy
 
 
 class TestAmountCap:
@@ -25,7 +25,9 @@ class TestAmountCap:
         assert "$50.00" in result.denial_reason
 
     def test_amount_cap_is_first_check(self):
-        engine = PolicyEngine(SpendPolicy(max_transaction=10.0, blocked_vendors=["vendor"]))
+        engine = PolicyEngine(
+            SpendPolicy(max_transaction=10.0, blocked_vendors=["vendor"])
+        )
         result = engine.evaluate(100.0, "vendor", "reason")
         assert not result.approved
         assert "exceeds limit" in result.denial_reason

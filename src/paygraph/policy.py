@@ -119,7 +119,9 @@ class PolicyEngine:
         vendor_lower = vendor.lower()
         if self.policy.allowed_vendors is not None:
             if not any(v.lower() in vendor_lower for v in self.policy.allowed_vendors):
-                return _fail("vendor_allowlist", f"Vendor '{vendor}' is not in the allowed list")
+                return _fail(
+                    "vendor_allowlist", f"Vendor '{vendor}' is not in the allowed list"
+                )
         _pass("vendor_allowlist")
 
         if self.policy.blocked_vendors is not None:
@@ -140,7 +142,9 @@ class PolicyEngine:
 
         # 5. Justification present
         if self.policy.require_justification and not justification:
-            return _fail("justification", "Justification is required but was not provided")
+            return _fail(
+                "justification", "Justification is required but was not provided"
+            )
         _pass("justification")
 
         # Approved — increment daily spend
