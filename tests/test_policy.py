@@ -96,6 +96,7 @@ class TestDailyBudget:
         engine = PolicyEngine(SpendPolicy(max_transaction=100.0, daily_budget=100.0))
         r1 = engine.evaluate(60.0, "vendor", "reason")
         assert r1.approved
+        engine.commit_spend(60.0)
         r2 = engine.evaluate(50.0, "vendor", "reason")
         assert not r2.approved
         assert "Daily budget exhausted" in r2.denial_reason
@@ -119,6 +120,7 @@ class TestDailyBudget:
     def test_resets_on_new_day(self):
         engine = PolicyEngine(SpendPolicy(max_transaction=100.0, daily_budget=100.0))
         engine.evaluate(80.0, "vendor", "reason")
+        engine.commit_spend(80.0)
 
         # Simulate next day
         tomorrow = date(2099, 1, 2)
@@ -127,6 +129,25 @@ class TestDailyBudget:
             mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
             result = engine.evaluate(80.0, "vendor", "reason")
             assert result.approved
+
+
+class TestCommitSpend:
+    def test_evaluate_does_not_increment_before_commit(self):
+        engine = PolicyEngine(SpendPolicy(max_transaction=100.0, daily_budget=100.0))
+        result = engine.evaluate(60.0, "vendor", "reason")
+        assert result.approved
+        # Without commit, budget is still 0 — second call still passes
+        result2 = engine.evaluate(60.0, "vendor", "reason")
+        assert result2.approved
+
+    def test_commit_spend_increments_budget(self):
+        engine = PolicyEngine(SpendPolicy(max_transaction=100.0, daily_budget=100.0))
+        engine.evaluate(60.0, "vendor", "reason")
+        engine.commit_spend(60.0)
+        # Now budget is consumed — next call should fail
+        result = engine.evaluate(50.0, "vendor", "reason")
+        assert not result.approved
+        assert "Daily budget exhausted" in result.denial_reason
 
 
 class TestJustification:

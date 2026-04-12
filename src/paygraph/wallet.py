@@ -96,6 +96,7 @@ class AgentWallet:
         amount_cents = int(round(amount * 100))
         try:
             card = self.gateway.execute_spend(amount_cents, vendor, justification)
+            self.policy_engine.commit_spend(amount)
         except SpendDeniedError:
             self._audit.log(
                 AuditRecord.now(
@@ -248,6 +249,7 @@ class AgentWallet:
                 url, amount_cents, vendor, justification,
                 method=method, headers=headers, body=body,
             )
+            self.policy_engine.commit_spend(amount)
         except SpendDeniedError:
             self._audit.log(
                 AuditRecord.now(

@@ -143,7 +143,11 @@ class PolicyEngine:
             return _fail("justification", "Justification is required but was not provided")
         _pass("justification")
 
-        # Approved — increment daily spend
-        self._daily_spend += amount
-
         return PolicyResult(approved=True, checks_passed=checks_passed)
+
+    def commit_spend(self, amount: float) -> None:
+        """Commit an approved spend to the daily total.
+
+        Must be called after a successful gateway call to record the spend.
+        """
+        self._daily_spend += amount
