@@ -121,6 +121,7 @@ class TestDailyBudget:
     def test_resets_on_new_day(self):
         engine = PolicyEngine(SpendPolicy(max_transaction=100.0, daily_budget=100.0))
         engine.evaluate(80.0, "vendor", "reason")
+        engine.commit_spend(80.0)
 
         # Simulate next day
         tomorrow = date(2099, 1, 2)
