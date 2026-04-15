@@ -148,7 +148,12 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
         currency = os.environ.get("STRIPE_CURRENCY", "usd")
         billing_country = os.environ.get("STRIPE_BILLING_COUNTRY")
         billing_address = (
-            {"line1": "N/A", "city": "N/A", "postal_code": "00000", "country": billing_country}
+            {
+                "line1": "N/A",
+                "city": "N/A",
+                "postal_code": "00000",
+                "country": billing_country,
+            }
             if billing_country
             else None
         )
@@ -159,7 +164,9 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
             billing_address=billing_address,
             cardholder_id=cardholder_id,
         )
-        gateway_label = f"StripeCardGateway ({gateway._gateway_type.rsplit('_', 1)[-1]})"
+        gateway_label = (
+            f"StripeCardGateway ({gateway._gateway_type.rsplit('_', 1)[-1]})"
+        )
     elif stripe_mpp:
         from paygraph.gateways.stripe_mpp import StripeMPPGateway
 
@@ -269,7 +276,11 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
         elif role == "AIMessage":
             # Skip raw tool_use dicts, only show text
             if isinstance(content, list):
-                texts = [c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text"]
+                texts = [
+                    c["text"]
+                    for c in content
+                    if isinstance(c, dict) and c.get("type") == "text"
+                ]
                 content = " ".join(texts)
                 if not content:
                     continue

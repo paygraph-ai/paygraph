@@ -3,7 +3,6 @@ import httpx
 from paygraph.exceptions import GatewayError
 from paygraph.gateways.base import BaseGateway, VirtualCard
 
-
 _DEFAULT_BILLING = {
     "line1": "1 Market St",
     "city": "San Francisco",
@@ -64,7 +63,9 @@ class StripeCardGateway(BaseGateway):
         self._single_use = single_use
         self._allowed_mccs = allowed_mccs
         self._blocked_mccs = blocked_mccs
-        self._card_cache: dict[str, str] | None = None  # cached card detail for reuse mode
+        self._card_cache: dict[str, str] | None = (
+            None  # cached card detail for reuse mode
+        )
 
     def _find_existing_cardholder(self) -> str | None:
         """Look for an existing PayGraph Agent cardholder."""
@@ -116,7 +117,9 @@ class StripeCardGateway(BaseGateway):
         self._cardholder_id = resp.json()["id"]
         return self._cardholder_id
 
-    def _create_card(self, cardholder_id: str, amount_cents: int, vendor: str, memo: str) -> dict:
+    def _create_card(
+        self, cardholder_id: str, amount_cents: int, vendor: str, memo: str
+    ) -> dict:
         """Create a new Stripe Issuing card and return its expanded detail."""
         card_data: dict[str, str] = {
             "type": "virtual",

@@ -56,9 +56,7 @@ class TestAuditLogger:
 
         logger = AuditLogger(log_path=path, verbose=False)
         for i in range(5):
-            logger.log(
-                AuditRecord.now("a", float(i), "v", "j", "approved")
-            )
+            logger.log(AuditRecord.now("a", float(i), "v", "j", "approved"))
 
         with open(path) as f:
             for line in f:

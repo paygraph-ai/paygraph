@@ -73,7 +73,11 @@ class TestCardholderCreation:
         gw.execute_spend(420, "Anthropic", "API credits")
 
         # Verify cardholder POST was called
-        cardholder_posts = [c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cardholders"]
+        cardholder_posts = [
+            c
+            for c in mock_client.post.call_args_list
+            if c[0][0] == "/v1/issuing/cardholders"
+        ]
         assert len(cardholder_posts) == 1
 
     @patch("paygraph.gateways.stripe.httpx.Client")
@@ -92,7 +96,11 @@ class TestCardholderCreation:
         gw.execute_spend(420, "Anthropic", "API credits")
 
         # No cardholder POST — reused existing
-        cardholder_posts = [c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cardholders"]
+        cardholder_posts = [
+            c
+            for c in mock_client.post.call_args_list
+            if c[0][0] == "/v1/issuing/cardholders"
+        ]
         assert len(cardholder_posts) == 0
         assert gw._cardholder_id == "ich_existing_123"
 
@@ -118,7 +126,11 @@ class TestCardholderCreation:
         gw.execute_spend(100, "OpenAI", "Tokens")
 
         # Cardholder POST only called once
-        cardholder_posts = [c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cardholders"]
+        cardholder_posts = [
+            c
+            for c in mock_client.post.call_args_list
+            if c[0][0] == "/v1/issuing/cardholders"
+        ]
         assert len(cardholder_posts) == 1
 
     @patch("paygraph.gateways.stripe.httpx.Client")
@@ -137,7 +149,9 @@ class TestCardholderCreation:
         cardholder_gets = [c for c in get_calls if "/v1/issuing/cardholders" in str(c)]
         assert len(cardholder_gets) == 0
         post_calls = mock_client.post.call_args_list
-        cardholder_posts = [c for c in post_calls if c[0][0] == "/v1/issuing/cardholders"]
+        cardholder_posts = [
+            c for c in post_calls if c[0][0] == "/v1/issuing/cardholders"
+        ]
         assert len(cardholder_posts) == 0
 
 
@@ -168,12 +182,16 @@ class TestExecuteSpend:
         mock_client.post.return_value = _mock_response(200, _CARD_CREATE_JSON)
         mock_client.get.return_value = _mock_response(200, _CARD_DETAIL_JSON)
 
-        gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx", single_use=True)
+        gw = StripeCardGateway(
+            api_key="sk_test_xxx", cardholder_id="ich_xxx", single_use=True
+        )
         gw.execute_spend(420, "Anthropic", "API credits")
         gw.execute_spend(100, "OpenAI", "Tokens")
 
         # Two card creation POSTs
-        card_posts = [c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"]
+        card_posts = [
+            c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"
+        ]
         assert len(card_posts) == 2
 
     @patch("paygraph.gateways.stripe.httpx.Client")
@@ -183,20 +201,28 @@ class TestExecuteSpend:
 
         mock_client.post.side_effect = [
             _mock_response(200, _CARD_CREATE_JSON),  # card create
-            _mock_response(200),                      # spending limit update
+            _mock_response(200),  # spending limit update
         ]
         mock_client.get.return_value = _mock_response(200, _CARD_DETAIL_JSON)
 
-        gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx", single_use=False)
+        gw = StripeCardGateway(
+            api_key="sk_test_xxx", cardholder_id="ich_xxx", single_use=False
+        )
         card1 = gw.execute_spend(420, "Anthropic", "API credits")
         card2 = gw.execute_spend(100, "OpenAI", "Tokens")
 
         # Only one card creation POST
-        card_creates = [c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"]
+        card_creates = [
+            c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"
+        ]
         assert len(card_creates) == 1
 
         # Second call updates spending limit on existing card
-        limit_updates = [c for c in mock_client.post.call_args_list if c[0][0] == f"/v1/issuing/cards/{_CARD_DETAIL_JSON['id']}"]
+        limit_updates = [
+            c
+            for c in mock_client.post.call_args_list
+            if c[0][0] == f"/v1/issuing/cards/{_CARD_DETAIL_JSON['id']}"
+        ]
         assert len(limit_updates) == 1
 
         # Both return same card ref
@@ -217,7 +243,9 @@ class TestExecuteSpend:
         )
         gw.execute_spend(420, "Anthropic", "API credits")
 
-        card_post = [c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"][0]
+        card_post = [
+            c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"
+        ][0]
         card_data = card_post[1]["data"]
         assert card_data["spending_controls[allowed_categories][0]"] == "7372"
         assert card_data["spending_controls[allowed_categories][1]"] == "5734"
@@ -237,7 +265,9 @@ class TestExecuteSpend:
         )
         gw.execute_spend(420, "Anthropic", "API credits")
 
-        card_post = [c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"][0]
+        card_post = [
+            c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"
+        ][0]
         card_data = card_post[1]["data"]
         assert card_data["spending_controls[blocked_categories][0]"] == "7995"
         assert card_data["spending_controls[blocked_categories][1]"] == "5813"
@@ -253,7 +283,9 @@ class TestExecuteSpend:
         gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
         gw.execute_spend(420, "Anthropic", "API credits")
 
-        card_post = [c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"][0]
+        card_post = [
+            c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"
+        ][0]
         card_data = card_post[1]["data"]
         assert not any("allowed_categories" in k for k in card_data)
         assert not any("blocked_categories" in k for k in card_data)

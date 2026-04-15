@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from paygraph.exceptions import GatewayError
-from paygraph.gateways.stripe_mpp import StripeMPPGateway, _ISSUE_PATH, _deactivate_path
+from paygraph.gateways.stripe_mpp import _ISSUE_PATH, StripeMPPGateway, _deactivate_path
 
 
 def _mock_response(status_code=200, json_data=None):
@@ -94,7 +94,9 @@ class TestExecuteSpend:
             currency="usd",
             expires_in_seconds=7200,
         )
-        with patch("paygraph.gateways.stripe_mpp.time.time", return_value=1_700_000_000):
+        with patch(
+            "paygraph.gateways.stripe_mpp.time.time", return_value=1_700_000_000
+        ):
             card = gw.execute_spend(420, "Anthropic", "API credits")
 
         assert card.pan == "SPT_NO_PAN"

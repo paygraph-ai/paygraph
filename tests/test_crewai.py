@@ -36,13 +36,19 @@ class TestCrewAITool:
         wallet.__dict__.pop("crewai_tool", None)
         wallet.__dict__.pop("spend_tool", None)
 
-        with patch.dict("sys.modules", {"crewai": mock_crewai, "crewai.tools": mock_crewai.tools}):
+        with patch.dict(
+            "sys.modules", {"crewai": mock_crewai, "crewai.tools": mock_crewai.tools}
+        ):
             tool = wallet.crewai_tool
 
         # Verify CrewAI Tool was constructed with the right args
         mock_crewai_tool_cls.assert_called_once()
         call_kwargs = mock_crewai_tool_cls.call_args.kwargs
         assert call_kwargs["name"] == "mint_virtual_card"
-        assert "spend" in call_kwargs["description"].lower() or "purchase" in call_kwargs["description"].lower() or "money" in call_kwargs["description"].lower()
+        assert (
+            "spend" in call_kwargs["description"].lower()
+            or "purchase" in call_kwargs["description"].lower()
+            or "money" in call_kwargs["description"].lower()
+        )
         assert callable(call_kwargs["func"])
         assert tool is mock_tool_instance
