@@ -24,13 +24,41 @@ class TestAmountCap:
         assert "$50.01" in result.denial_reason
         assert "$50.00" in result.denial_reason
 
-    def test_amount_cap_is_first_check(self):
+    def test_amount_cap_is_second_check(self):
         engine = PolicyEngine(
             SpendPolicy(max_transaction=10.0, blocked_vendors=["vendor"])
         )
         result = engine.evaluate(100.0, "vendor", "reason")
         assert not result.approved
         assert "exceeds limit" in result.denial_reason
+        assert result.checks_passed == ["positive_amount"]
+
+
+class TestPositiveAmount:
+    def test_positive_amount_passes(self):
+        engine = PolicyEngine(SpendPolicy())
+        result = engine.evaluate(5.0, "vendor", "reason")
+        assert result.approved
+        assert "positive_amount" in result.checks_passed
+
+    def test_zero_amount_denied(self):
+        engine = PolicyEngine(SpendPolicy())
+        result = engine.evaluate(0.0, "vendor", "reason")
+        assert not result.approved
+        assert "must be positive" in result.denial_reason
+        assert result.checks_passed == []
+
+    def test_negative_amount_denied(self):
+        engine = PolicyEngine(SpendPolicy())
+        result = engine.evaluate(-10.0, "vendor", "reason")
+        assert not result.approved
+        assert "must be positive" in result.denial_reason
+
+    def test_positive_amount_is_first_check(self):
+        # Even if amount exceeds cap, positive check runs first
+        engine = PolicyEngine(SpendPolicy(max_transaction=5.0))
+        result = engine.evaluate(-10.0, "vendor", "reason")
+        assert "must be positive" in result.denial_reason
         assert result.checks_passed == []
 
 
@@ -161,6 +189,7 @@ class TestCheckOrdering:
         result = engine.evaluate(5.0, "vendor", "reason")
         assert result.approved
         assert result.checks_passed == [
+            "positive_amount",
             "amount_cap",
             "vendor_allowlist",
             "vendor_blocklist",
@@ -174,6 +203,6 @@ class TestCheckOrdering:
             SpendPolicy(max_transaction=1.0, blocked_vendors=["vendor"])
         )
         result = engine.evaluate(10.0, "vendor", "reason")
-        # Amount cap fails first, so blocked vendor check never runs
+        # Amount cap fails second (after positive_amount), so blocked vendor check never runs
         assert "exceeds limit" in result.denial_reason
-        assert result.checks_passed == []
+        assert result.checks_passed == ["positive_amount"]

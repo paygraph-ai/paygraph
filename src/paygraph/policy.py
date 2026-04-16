@@ -107,6 +107,14 @@ class PolicyEngine:
                 checks_passed=checks_passed,
             )
 
+        # 0. Positive amount check
+        if amount <= 0:
+            return _fail(
+                "positive_amount",
+                f"Amount must be positive (got ${amount:.2f})",
+            )
+        _pass("positive_amount")
+
         # 1. Amount cap
         if amount > self.policy.max_transaction:
             return _fail(
