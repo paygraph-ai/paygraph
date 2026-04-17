@@ -134,6 +134,31 @@ class TestGatewayFailure:
         assert "Gateway error" in records[0]["denial_reason"]
 
 
+class TestGatewayFailureDoesNotConsumeBudget:
+    def test_daily_budget_not_decremented_on_gateway_error(self):
+        """A gateway failure must not consume the daily budget (issue #9)."""
+
+        class BrokenGateway(BaseGateway):
+            def execute_spend(self, amount_cents, vendor, memo):
+                raise RuntimeError("network timeout")
+
+            def revoke(self, gateway_ref):
+                return False
+
+        policy = SpendPolicy(max_transaction=50.0, daily_budget=100.0)
+        wallet, _ = _make_wallet(gateway=BrokenGateway(), policy=policy)
+
+        with pytest.raises(GatewayError):
+            wallet.request_spend(40.0, "vendor", "reason")
+
+        # Budget must still be fully available — the failed spend should not count
+        assert wallet.policy_engine._daily_spend == 0.0
+
+        wallet.gateway = MockGateway(auto_approve=True)
+        result = wallet.request_spend(40.0, "vendor", "reason")
+        assert "Card approved" in result
+
+
 class TestAgentId:
     def test_agent_id_in_audit(self):
         wallet, path = _make_wallet(agent_id="agent-007")
