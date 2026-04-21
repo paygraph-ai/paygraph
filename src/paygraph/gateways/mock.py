@@ -1,7 +1,7 @@
 import secrets
 
 from paygraph.exceptions import SpendDeniedError
-from paygraph.gateways.base import BaseGateway, VirtualCard
+from paygraph.gateways.base import BaseGateway, CardResult
 
 
 class MockGateway(BaseGateway):
@@ -19,9 +19,9 @@ class MockGateway(BaseGateway):
                 approve all requests automatically.
         """
         self.auto_approve = auto_approve
-        self._cards: dict[str, VirtualCard] = {}
+        self._cards: dict[str, CardResult] = {}
 
-    def execute_spend(self, amount_cents: int, vendor: str, memo: str) -> VirtualCard:
+    def execute(self, amount_cents: int, vendor: str, memo: str, **kwargs) -> CardResult:
         """Create a mock virtual card, optionally prompting for approval.
 
         Args:
@@ -30,7 +30,7 @@ class MockGateway(BaseGateway):
             memo: Justification for the spend.
 
         Returns:
-            A ``VirtualCard`` with a fake PAN (``4111111111111111``).
+            A ``CardResult`` with a fake PAN (``4111111111111111``).
 
         Raises:
             SpendDeniedError: If the human denies the approval prompt.
@@ -46,11 +46,12 @@ class MockGateway(BaseGateway):
                 )
 
         token = f"mock_{secrets.token_hex(8)}"
-        card = VirtualCard(
+        card = CardResult(
             pan="4111111111111111",
             cvv="123",
             expiry="12/28",
             spend_limit_cents=amount_cents,
+            amount_cents=amount_cents,
             gateway_ref=token,
             gateway_type="mock",
         )

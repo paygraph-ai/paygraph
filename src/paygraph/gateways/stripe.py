@@ -1,7 +1,7 @@
 import httpx
 
 from paygraph.exceptions import GatewayError
-from paygraph.gateways.base import BaseGateway, VirtualCard
+from paygraph.gateways.base import BaseGateway, CardResult
 
 _DEFAULT_BILLING = {
     "line1": "1 Market St",
@@ -184,7 +184,7 @@ class StripeCardGateway(BaseGateway):
         except httpx.HTTPError as e:
             raise GatewayError(f"Stripe API unreachable: {e}") from e
 
-    def execute_spend(self, amount_cents: int, vendor: str, memo: str) -> VirtualCard:
+    def execute(self, amount_cents: int, vendor: str, memo: str, **kwargs) -> CardResult:
         """Create a Stripe Issuing virtual card with the given spend limit.
 
         Calls the Stripe ``/v1/issuing/cards`` API to mint a new card
@@ -196,7 +196,7 @@ class StripeCardGateway(BaseGateway):
             memo: Justification (stored in card metadata, truncated to 500 chars).
 
         Returns:
-            A ``VirtualCard`` with the real PAN, CVV, and expiry.
+            A ``CardResult`` with the real PAN, CVV, and expiry.
 
         Raises:
             GatewayError: If the Stripe API call fails.
@@ -214,11 +214,12 @@ class StripeCardGateway(BaseGateway):
         exp_month = detail["exp_month"]
         exp_year = detail["exp_year"]
 
-        return VirtualCard(
+        return CardResult(
             pan=detail["number"],
             cvv=detail["cvc"],
             expiry=f"{exp_month:02d}/{exp_year % 100:02d}",
             spend_limit_cents=amount_cents,
+            amount_cents=amount_cents,
             gateway_ref=detail["id"],
             gateway_type=self._gateway_type,
         )

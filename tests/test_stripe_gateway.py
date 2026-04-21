@@ -70,7 +70,7 @@ class TestCardholderCreation:
         ]
 
         gw = StripeCardGateway(api_key="sk_test_xxx")
-        gw.execute_spend(420, "Anthropic", "API credits")
+        gw.execute(420, "Anthropic", "API credits")
 
         # Verify cardholder POST was called
         cardholder_posts = [
@@ -93,7 +93,7 @@ class TestCardholderCreation:
         mock_client.post.return_value = _mock_response(200, _CARD_CREATE_JSON)
 
         gw = StripeCardGateway(api_key="sk_test_xxx")
-        gw.execute_spend(420, "Anthropic", "API credits")
+        gw.execute(420, "Anthropic", "API credits")
 
         # No cardholder POST — reused existing
         cardholder_posts = [
@@ -122,8 +122,8 @@ class TestCardholderCreation:
         ]
 
         gw = StripeCardGateway(api_key="sk_test_xxx")
-        gw.execute_spend(420, "Anthropic", "API credits")
-        gw.execute_spend(100, "OpenAI", "Tokens")
+        gw.execute(420, "Anthropic", "API credits")
+        gw.execute(100, "OpenAI", "Tokens")
 
         # Cardholder POST only called once
         cardholder_posts = [
@@ -142,7 +142,7 @@ class TestCardholderCreation:
         mock_client.get.return_value = _mock_response(200, _CARD_DETAIL_JSON)
 
         gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
-        gw.execute_spend(420, "Anthropic", "API credits")
+        gw.execute(420, "Anthropic", "API credits")
 
         # No cardholder list GET or POST
         get_calls = mock_client.get.call_args_list
@@ -165,7 +165,7 @@ class TestExecuteSpend:
         mock_client.get.return_value = _mock_response(200, _CARD_DETAIL_JSON)
 
         gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
-        card = gw.execute_spend(420, "Anthropic", "API credits")
+        card = gw.execute(420, "Anthropic", "API credits")
 
         assert card.pan == "4242424242424242"
         assert card.cvv == "789"
@@ -185,8 +185,8 @@ class TestExecuteSpend:
         gw = StripeCardGateway(
             api_key="sk_test_xxx", cardholder_id="ich_xxx", single_use=True
         )
-        gw.execute_spend(420, "Anthropic", "API credits")
-        gw.execute_spend(100, "OpenAI", "Tokens")
+        gw.execute(420, "Anthropic", "API credits")
+        gw.execute(100, "OpenAI", "Tokens")
 
         # Two card creation POSTs
         card_posts = [
@@ -208,8 +208,8 @@ class TestExecuteSpend:
         gw = StripeCardGateway(
             api_key="sk_test_xxx", cardholder_id="ich_xxx", single_use=False
         )
-        card1 = gw.execute_spend(420, "Anthropic", "API credits")
-        card2 = gw.execute_spend(100, "OpenAI", "Tokens")
+        card1 = gw.execute(420, "Anthropic", "API credits")
+        card2 = gw.execute(100, "OpenAI", "Tokens")
 
         # Only one card creation POST
         card_creates = [
@@ -241,7 +241,7 @@ class TestExecuteSpend:
             cardholder_id="ich_xxx",
             allowed_mccs=["7372", "5734"],
         )
-        gw.execute_spend(420, "Anthropic", "API credits")
+        gw.execute(420, "Anthropic", "API credits")
 
         card_post = [
             c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"
@@ -263,7 +263,7 @@ class TestExecuteSpend:
             cardholder_id="ich_xxx",
             blocked_mccs=["7995", "5813"],
         )
-        gw.execute_spend(420, "Anthropic", "API credits")
+        gw.execute(420, "Anthropic", "API credits")
 
         card_post = [
             c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"
@@ -281,7 +281,7 @@ class TestExecuteSpend:
         mock_client.get.return_value = _mock_response(200, _CARD_DETAIL_JSON)
 
         gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
-        gw.execute_spend(420, "Anthropic", "API credits")
+        gw.execute(420, "Anthropic", "API credits")
 
         card_post = [
             c for c in mock_client.post.call_args_list if c[0][0] == "/v1/issuing/cards"
@@ -300,7 +300,7 @@ class TestExecuteSpend:
 
         gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
         with pytest.raises(GatewayError, match="Stripe API error: Invalid card params"):
-            gw.execute_spend(420, "vendor", "memo")
+            gw.execute(420, "vendor", "memo")
 
     @patch("paygraph.gateways.stripe.httpx.Client")
     def test_network_error(self, mock_client_cls):
@@ -310,7 +310,7 @@ class TestExecuteSpend:
 
         gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
         with pytest.raises(GatewayError, match="Stripe API unreachable"):
-            gw.execute_spend(420, "vendor", "memo")
+            gw.execute(420, "vendor", "memo")
 
 
 class TestRevoke:

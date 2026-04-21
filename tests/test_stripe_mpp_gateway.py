@@ -97,7 +97,7 @@ class TestExecuteSpend:
         with patch(
             "paygraph.gateways.stripe_mpp.time.time", return_value=1_700_000_000
         ):
-            card = gw.execute_spend(420, "Anthropic", "API credits")
+            card = gw.execute(420, "Anthropic", "API credits")
 
         assert card.pan == "SPT_NO_PAN"
         assert card.cvv == "N/A"
@@ -134,7 +134,7 @@ class TestExecuteSpend:
         )
         long_vendor = "V" * 150
         long_memo = "M" * 600
-        gw.execute_spend(100, long_vendor, long_memo)
+        gw.execute(100, long_vendor, long_memo)
         data = mock_client.post.call_args[1]["data"]
         assert len(data["metadata[vendor]"]) == 100
         assert len(data["metadata[memo]"]) == 500
@@ -153,7 +153,7 @@ class TestExecuteSpend:
             grantee="profile_x",
         )
         with pytest.raises(GatewayError, match="Stripe API error: invalid_grantee"):
-            gw.execute_spend(100, "v", "m")
+            gw.execute(100, "v", "m")
 
     @patch("paygraph.gateways.stripe_mpp.httpx.Client")
     def test_http_error_with_non_json_body(self, mock_client_cls):
@@ -169,7 +169,7 @@ class TestExecuteSpend:
             grantee="profile_x",
         )
         with pytest.raises(GatewayError, match="Stripe API error:"):
-            gw.execute_spend(100, "v", "m")
+            gw.execute(100, "v", "m")
 
     @patch("paygraph.gateways.stripe_mpp.httpx.Client")
     def test_missing_id_in_response(self, mock_client_cls):
@@ -183,7 +183,7 @@ class TestExecuteSpend:
             grantee="profile_x",
         )
         with pytest.raises(GatewayError, match="no token id"):
-            gw.execute_spend(100, "v", "m")
+            gw.execute(100, "v", "m")
 
     @patch("paygraph.gateways.stripe_mpp.httpx.Client")
     def test_network_error(self, mock_client_cls):
@@ -197,7 +197,7 @@ class TestExecuteSpend:
             grantee="profile_x",
         )
         with pytest.raises(GatewayError, match="Stripe API unreachable"):
-            gw.execute_spend(100, "v", "m")
+            gw.execute(100, "v", "m")
 
     @patch("paygraph.gateways.stripe_mpp.httpx.Client")
     def test_omits_empty_vendor_and_memo_metadata(self, mock_client_cls):
@@ -210,7 +210,7 @@ class TestExecuteSpend:
             payment_method="pm_x",
             grantee="profile_x",
         )
-        gw.execute_spend(100, "", "")
+        gw.execute(100, "", "")
         data = mock_client.post.call_args[1]["data"]
         assert "metadata[vendor]" not in data
         assert "metadata[memo]" not in data

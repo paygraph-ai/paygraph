@@ -13,7 +13,7 @@ class TestCrewAITool:
 
     def test_crewai_tool_raises_import_error_without_crewai(self):
         """crewai_tool raises a helpful ImportError when crewai is not installed."""
-        wallet = AgentWallet(gateway=MockGateway(auto_approve=True))
+        wallet = AgentWallet(gateways=MockGateway(auto_approve=True))
 
         with patch.dict("sys.modules", {"crewai": None, "crewai.tools": None}):
             # Clear cached property so it re-evaluates
@@ -31,7 +31,7 @@ class TestCrewAITool:
         mock_crewai.tools = MagicMock()
         mock_crewai.tools.Tool = mock_crewai_tool_cls
 
-        wallet = AgentWallet(gateway=MockGateway(auto_approve=True))
+        wallet = AgentWallet(gateways=MockGateway(auto_approve=True))
         # Clear cached properties
         wallet.__dict__.pop("crewai_tool", None)
         wallet.__dict__.pop("spend_tool", None)

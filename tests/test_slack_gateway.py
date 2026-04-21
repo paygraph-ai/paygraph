@@ -31,7 +31,7 @@ def _make_slack_wallet(
         inner_gateway=inner_gateway or MockGateway(auto_approve=True),
     )
     wallet = AgentWallet(
-        gateway=gateway,
+        gateways=gateway,
         policy=policy or SpendPolicy(require_human_approval_above=20.0),
         log_path=f.name,
         verbose=False,
@@ -230,7 +230,7 @@ class TestWalletSlackFlow:
         f = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
         f.close()
         wallet = AgentWallet(
-            gateway=MockGateway(auto_approve=True),
+            gateways=MockGateway(auto_approve=True),
             log_path=f.name,
             verbose=False,
         )

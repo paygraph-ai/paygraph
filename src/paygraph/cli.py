@@ -25,7 +25,7 @@ def run_demo() -> None:
     )
 
     wallet = AgentWallet(
-        gateway=MockGateway(auto_approve=True),
+        gateways=MockGateway(auto_approve=True),
         policy=policy,
         agent_id="demo-agent",
         log_path=audit_path,
@@ -239,7 +239,7 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
     )
 
     wallet = AgentWallet(
-        gateway=gateway,
+        gateways=gateway,
         policy=policy,
         agent_id="live-demo-agent",
         log_path=audit_path,

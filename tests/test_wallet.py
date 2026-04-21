@@ -4,19 +4,19 @@ import tempfile
 import pytest
 
 from paygraph.exceptions import GatewayError, PolicyViolationError, SpendDeniedError
-from paygraph.gateways.base import BaseGateway, VirtualCard
+from paygraph.gateways.base import BaseGateway, CardResult
 from paygraph.gateways.mock import MockGateway
 from paygraph.policy import SpendPolicy
 from paygraph.wallet import AgentWallet
 
 
-def _make_wallet(gateway=None, policy=None, **kwargs) -> tuple[AgentWallet, str]:
+def _make_wallet(gateways=None, policy=None, **kwargs) -> tuple[AgentWallet, str]:
     """Create a wallet with a temp audit file. Returns (wallet, audit_path)."""
     f = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
     f.close()
     return (
         AgentWallet(
-            gateway=gateway or MockGateway(auto_approve=True),
+            gateways=gateways or MockGateway(auto_approve=True),
             policy=policy or SpendPolicy(),
             log_path=f.name,
             verbose=False,
@@ -53,20 +53,18 @@ class TestApprovedSpend:
 
     def test_returns_spt_token_string_for_mpp_gateway(self):
         class MppGateway(BaseGateway):
-            def execute_spend(self, amount_cents, vendor, memo):
-                return VirtualCard(
+            def execute(self, amount_cents, vendor, memo, **kwargs):
+                return CardResult(
                     pan="SPT_NO_PAN",
                     cvv="N/A",
                     expiry="--/--",
                     spend_limit_cents=amount_cents,
+                    amount_cents=amount_cents,
                     gateway_ref="spt_test_abc123",
                     gateway_type="stripe_mpp_test",
                 )
 
-            def revoke(self, gateway_ref):
-                return True
-
-        wallet, _ = _make_wallet(gateway=MppGateway())
+        wallet, _ = _make_wallet(gateways=MppGateway())
         result = wallet.request_spend(4.20, "Anthropic", "need credits")
         assert result == "SPT approved. Token: spt_test_abc123 (spend limit: $4.20)"
 
@@ -90,13 +88,13 @@ class TestPolicyDenial:
 class TestHumanDenial:
     def test_raises_spend_denied(self, monkeypatch):
         monkeypatch.setattr("builtins.input", lambda _: "n")
-        wallet, _ = _make_wallet(gateway=MockGateway(auto_approve=False))
+        wallet, _ = _make_wallet(gateways=MockGateway(auto_approve=False))
         with pytest.raises(SpendDeniedError):
             wallet.request_spend(4.20, "Anthropic", "need credits")
 
     def test_audit_records_human_denial(self, monkeypatch):
         monkeypatch.setattr("builtins.input", lambda _: "n")
-        wallet, path = _make_wallet(gateway=MockGateway(auto_approve=False))
+        wallet, path = _make_wallet(gateways=MockGateway(auto_approve=False))
         with pytest.raises(SpendDeniedError):
             wallet.request_spend(4.20, "Anthropic", "need credits")
         records = _read_audit(path)
@@ -108,25 +106,19 @@ class TestHumanDenial:
 class TestGatewayFailure:
     def test_raises_gateway_error(self):
         class BrokenGateway(BaseGateway):
-            def execute_spend(self, amount_cents, vendor, memo):
+            def execute(self, amount_cents, vendor, memo, **kwargs):
                 raise RuntimeError("connection refused")
 
-            def revoke(self, gateway_ref):
-                return False
-
-        wallet, _ = _make_wallet(gateway=BrokenGateway())
+        wallet, _ = _make_wallet(gateways=BrokenGateway())
         with pytest.raises(GatewayError, match="connection refused"):
             wallet.request_spend(4.20, "vendor", "reason")
 
     def test_audit_records_gateway_failure(self):
         class BrokenGateway(BaseGateway):
-            def execute_spend(self, amount_cents, vendor, memo):
+            def execute(self, amount_cents, vendor, memo, **kwargs):
                 raise RuntimeError("timeout")
 
-            def revoke(self, gateway_ref):
-                return False
-
-        wallet, path = _make_wallet(gateway=BrokenGateway())
+        wallet, path = _make_wallet(gateways=BrokenGateway())
         with pytest.raises(GatewayError):
             wallet.request_spend(4.20, "vendor", "reason")
         records = _read_audit(path)
@@ -139,14 +131,11 @@ class TestGatewayFailureDoesNotConsumeBudget:
         """A gateway failure must not consume the daily budget (issue #9)."""
 
         class BrokenGateway(BaseGateway):
-            def execute_spend(self, amount_cents, vendor, memo):
+            def execute(self, amount_cents, vendor, memo, **kwargs):
                 raise RuntimeError("network timeout")
 
-            def revoke(self, gateway_ref):
-                return False
-
         policy = SpendPolicy(max_transaction=50.0, daily_budget=100.0)
-        wallet, _ = _make_wallet(gateway=BrokenGateway(), policy=policy)
+        wallet, _ = _make_wallet(gateways=BrokenGateway(), policy=policy)
 
         with pytest.raises(GatewayError):
             wallet.request_spend(40.0, "vendor", "reason")

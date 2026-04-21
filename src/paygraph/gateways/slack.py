@@ -3,7 +3,7 @@ import secrets
 import httpx
 
 from paygraph.exceptions import GatewayError, HumanApprovalRequired, SpendDeniedError
-from paygraph.gateways.base import BaseGateway, VirtualCard
+from paygraph.gateways.base import BaseGateway, CardResult, SpendResult
 
 
 class SlackApprovalGateway(BaseGateway):
@@ -26,7 +26,7 @@ class SlackApprovalGateway(BaseGateway):
             inner_gateway=MockGateway(auto_approve=True),
         )
         wallet = AgentWallet(
-            gateway=gateway,
+            gateways=gateway,
             policy=SpendPolicy(require_human_approval_above=20.0),
         )
 
@@ -98,7 +98,9 @@ class SlackApprovalGateway(BaseGateway):
         }
         raise HumanApprovalRequired(request_id, amount_dollars, vendor)
 
-    def execute_spend(self, amount_cents: int, vendor: str, memo: str) -> VirtualCard:
+    def execute(
+        self, amount_cents: int, vendor: str, memo: str, **kwargs
+    ) -> SpendResult:
         """Execute a spend directly via the inner gateway (below-threshold path).
 
         Args:
@@ -107,11 +109,11 @@ class SlackApprovalGateway(BaseGateway):
             memo: Justification for the spend.
 
         Returns:
-            A ``VirtualCard`` from the inner gateway.
+            A ``SpendResult`` from the inner gateway.
         """
-        return self.inner_gateway.execute_spend(amount_cents, vendor, memo)
+        return self.inner_gateway.execute(amount_cents, vendor, memo, **kwargs)
 
-    def complete_spend(self, request_id: str, approved: bool) -> VirtualCard:
+    def complete_spend(self, request_id: str, approved: bool) -> CardResult:
         """Resume a pending spend after a human has responded in Slack.
 
         Args:
@@ -120,7 +122,7 @@ class SlackApprovalGateway(BaseGateway):
             approved: ``True`` if the human approved, ``False`` if denied.
 
         Returns:
-            A ``VirtualCard`` from the inner gateway if approved.
+            A ``CardResult`` from the inner gateway if approved.
 
         Raises:
             SpendDeniedError: If ``approved`` is ``False``.
@@ -132,7 +134,7 @@ class SlackApprovalGateway(BaseGateway):
                 f"Human denied spend of ${pending['amount_cents'] / 100:.2f} "
                 f"for {pending['vendor']}"
             )
-        return self.inner_gateway.execute_spend(
+        return self.inner_gateway.execute(
             pending["amount_cents"], pending["vendor"], pending["memo"]
         )
 

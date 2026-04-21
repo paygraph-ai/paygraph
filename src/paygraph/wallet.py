@@ -6,6 +6,7 @@ from paygraph.exceptions import (
     PolicyViolationError,
     SpendDeniedError,
 )
+from paygraph.gateways.base import BaseGateway, CardResult, SpendResult
 from paygraph.gateways.mock import MockGateway
 from paygraph.gateways.slack import SlackApprovalGateway
 from paygraph.policy import PolicyEngine, SpendPolicy
@@ -15,7 +16,8 @@ class AgentWallet:
     """Main entry point for PayGraph spend governance.
 
     Orchestrates policy checks, gateway calls, and audit logging for both
-    virtual card and x402 payment flows.
+    virtual card and x402 payment flows. All gateways share a single
+    ``PolicyEngine``, ensuring a unified daily budget across payment types.
 
     Example:
         ```python
@@ -30,21 +32,19 @@ class AgentWallet:
 
     def __init__(
         self,
-        gateway=None,
-        x402_gateway=None,
+        gateways: dict[str, BaseGateway] | BaseGateway | None = None,
         policy: SpendPolicy | None = None,
         agent_id: str = "default",
         log_path: str = "paygraph_audit.jsonl",
         verbose: bool = True,
         animate: bool = False,
     ) -> None:
-        """Initialize the wallet with a gateway, policy, and audit settings.
+        """Initialize the wallet with gateways, policy, and audit settings.
 
         Args:
-            gateway: Card gateway implementing ``BaseGateway``. Defaults to
-                ``MockGateway()`` which prompts for human approval.
-            x402_gateway: Optional x402 gateway (``X402Gateway`` or
-                ``MockX402Gateway``) for HTTP 402 payments.
+            gateways: A single gateway, a named dict of gateways, or None
+                (defaults to ``{"default": MockGateway()}``). A single gateway
+                is auto-wrapped to ``{"default": gw}``.
             policy: Spend policy rules. Defaults to ``SpendPolicy()`` with
                 $50 max transaction and $200 daily budget.
             agent_id: Identifier for this agent in audit logs.
@@ -53,37 +53,58 @@ class AgentWallet:
             animate: If True, add a short delay between policy checks
                 for visual effect in demos.
         """
-        self.gateway = gateway or MockGateway()
-        self.x402_gateway = x402_gateway
+        if gateways is None:
+            self._gateways: dict[str, BaseGateway] = {"default": MockGateway()}
+        elif isinstance(gateways, BaseGateway):
+            self._gateways = {"default": gateways}
+        else:
+            self._gateways = dict(gateways)
+
         self.policy_engine = PolicyEngine(policy or SpendPolicy())
         self.agent_id = agent_id
         self._audit = AuditLogger(log_path=log_path, verbose=verbose, animate=animate)
 
-    def request_spend(self, amount: float, vendor: str, justification: str) -> str:
-        """Request a policy-checked virtual card spend.
+    @property
+    def gateway(self) -> BaseGateway | None:
+        """Backward-compatible alias for the ``"default"`` gateway."""
+        return self._gateways.get("default")
 
-        Evaluates the spend against the configured policy, then calls the
-        card gateway to mint a virtual card if approved.
+    @gateway.setter
+    def gateway(self, value: BaseGateway) -> None:
+        self._gateways["default"] = value
+
+    def _resolve_gateway(self, name: str) -> BaseGateway:
+        """Look up a gateway by name, raising GatewayError if not found."""
+        gw = self._gateways.get(name)
+        if gw is None:
+            raise GatewayError(
+                f"No gateway named '{name}' configured. "
+                f"Available: {list(self._gateways.keys())}"
+            )
+        return gw
+
+    def _execute_with_policy(
+        self,
+        gateway_name: str,
+        amount: float,
+        vendor: str,
+        justification: str,
+        **gateway_kwargs,
+    ) -> SpendResult:
+        """Shared orchestration: policy → Slack check → gateway → commit → audit.
 
         Args:
-            amount: Dollar amount to spend (e.g. 4.20 for $4.20).
-            vendor: Name of the vendor or service.
-            justification: Explanation of why this purchase is necessary.
+            gateway_name: Key into ``self._gateways``.
+            amount: Dollar amount to spend.
+            vendor: Vendor name.
+            justification: Justification string.
+            **gateway_kwargs: Extra kwargs passed to ``gateway.execute()``.
 
         Returns:
-            For most gateways, a string with card details (PAN, CVV, expiry).
-            For ``stripe_mpp_*`` gateways, a string with the SPT id and spend limit.
-
-        Raises:
-            PolicyViolationError: If the policy engine denies the request.
-            SpendDeniedError: If a human denies the request (MockGateway).
-            GatewayError: If the gateway API call fails.
-            HumanApprovalRequired: If the amount exceeds
-                ``policy.require_human_approval_above`` and a
-                ``SlackApprovalGateway`` is configured. Resume with
-                ``complete_spend(request_id, approved=True)``.
+            The ``SpendResult`` from the gateway.
         """
-        # Print header and run policy engine with live check output
+        gw = self._resolve_gateway(gateway_name)
+
         on_check = (
             self._audit.start_request(amount, vendor) if self._audit.verbose else None
         )
@@ -110,7 +131,7 @@ class AgentWallet:
         if (
             self.policy_engine.policy.require_human_approval_above is not None
             and amount > self.policy_engine.policy.require_human_approval_above
-            and isinstance(self.gateway, SlackApprovalGateway)
+            and isinstance(gw, SlackApprovalGateway)
         ):
             self._audit.log(
                 AuditRecord.now(
@@ -122,14 +143,13 @@ class AgentWallet:
                     checks_passed=result.checks_passed,
                 )
             )
-            self.gateway.request_approval(
+            gw.request_approval(
                 amount_cents, vendor, justification, justification=justification
             )
             # request_approval always raises HumanApprovalRequired — unreachable
 
-        # Mint card — commit the budget only after the gateway succeeds
         try:
-            card = self.gateway.execute_spend(amount_cents, vendor, justification)
+            spend_result = gw.execute(amount_cents, vendor, justification, **gateway_kwargs)
         except SpendDeniedError:
             self._audit.log(
                 AuditRecord.now(
@@ -160,7 +180,6 @@ class AgentWallet:
         # Gateway succeeded — now it is safe to commit the spend to the budget
         self.policy_engine.commit_spend(amount)
 
-        # Log approval
         self._audit.log(
             AuditRecord.now(
                 agent_id=self.agent_id,
@@ -169,19 +188,153 @@ class AgentWallet:
                 justification=justification,
                 policy_result="approved",
                 checks_passed=result.checks_passed,
-                gateway_ref=card.gateway_ref,
-                gateway_type=card.gateway_type,
+                gateway_ref=spend_result.gateway_ref,
+                gateway_type=spend_result.gateway_type,
             )
         )
 
-        if card.gateway_type.startswith("stripe_mpp"):
+        return spend_result
+
+    async def _execute_with_policy_async(
+        self,
+        gateway_name: str,
+        amount: float,
+        vendor: str,
+        justification: str,
+        **gateway_kwargs,
+    ) -> SpendResult:
+        """Async variant of :meth:`_execute_with_policy`.
+
+        Uses ``gateway.execute_async()`` instead of ``gateway.execute()``.
+        """
+        gw = self._resolve_gateway(gateway_name)
+
+        on_check = (
+            self._audit.start_request(amount, vendor) if self._audit.verbose else None
+        )
+        result = self.policy_engine.evaluate(
+            amount, vendor, justification, on_check=on_check
+        )
+
+        if not result.approved:
+            self._audit.log(
+                AuditRecord.now(
+                    agent_id=self.agent_id,
+                    amount=amount,
+                    vendor=vendor,
+                    justification=justification,
+                    policy_result="denied",
+                    denial_reason=result.denial_reason,
+                    checks_passed=result.checks_passed,
+                )
+            )
+            raise PolicyViolationError(result.denial_reason)
+
+        amount_cents = int(round(amount * 100))
+
+        try:
+            spend_result = await gw.execute_async(
+                amount_cents, vendor, justification, **gateway_kwargs
+            )
+        except SpendDeniedError:
+            self._audit.log(
+                AuditRecord.now(
+                    agent_id=self.agent_id,
+                    amount=amount,
+                    vendor=vendor,
+                    justification=justification,
+                    policy_result="denied",
+                    denial_reason="Human denied the x402 payment request",
+                    checks_passed=result.checks_passed,
+                )
+            )
+            raise
+        except Exception as e:
+            self._audit.log(
+                AuditRecord.now(
+                    agent_id=self.agent_id,
+                    amount=amount,
+                    vendor=vendor,
+                    justification=justification,
+                    policy_result="denied",
+                    denial_reason=f"Gateway error: {e}",
+                    checks_passed=result.checks_passed,
+                )
+            )
+            raise GatewayError(str(e)) from e
+
+        self.policy_engine.commit_spend(amount)
+
+        self._audit.log(
+            AuditRecord.now(
+                agent_id=self.agent_id,
+                amount=amount,
+                vendor=vendor,
+                justification=justification,
+                policy_result="approved",
+                checks_passed=result.checks_passed,
+                gateway_ref=spend_result.gateway_ref,
+                gateway_type=spend_result.gateway_type,
+            )
+        )
+
+        return spend_result
+
+    def request_spend(
+        self,
+        amount: float,
+        vendor: str,
+        justification: str,
+        gateway: str = "default",
+    ) -> str:
+        """Request a policy-checked virtual card spend.
+
+        Evaluates the spend against the configured policy, then calls the
+        card gateway to mint a virtual card if approved.
+
+        Args:
+            amount: Dollar amount to spend (e.g. 4.20 for $4.20).
+            vendor: Name of the vendor or service.
+            justification: Explanation of why this purchase is necessary.
+            gateway: Name of the gateway to use (default ``"default"``).
+
+        Returns:
+            For most gateways, a string with card details (PAN, CVV, expiry).
+            For ``stripe_mpp_*`` gateways, a string with the SPT id and spend limit.
+
+        Raises:
+            PolicyViolationError: If the policy engine denies the request.
+            SpendDeniedError: If a human denies the request (MockGateway).
+            GatewayError: If the gateway API call fails.
+            HumanApprovalRequired: If the amount exceeds
+                ``policy.require_human_approval_above`` and a
+                ``SlackApprovalGateway`` is configured. Resume with
+                ``complete_spend(request_id, approved=True)``.
+        """
+        spend_result = self._execute_with_policy(
+            gateway, amount, vendor, justification
+        )
+
+        if isinstance(spend_result, CardResult):
+            if spend_result.gateway_type.startswith("stripe_mpp"):
+                return (
+                    f"SPT approved. Token: {spend_result.gateway_ref} "
+                    f"(spend limit: ${amount:.2f})"
+                )
             return (
-                f"SPT approved. Token: {card.gateway_ref} (spend limit: ${amount:.2f})"
+                f"Card approved. PAN: {spend_result.pan}, "
+                f"CVV: {spend_result.cvv}, Expiry: {spend_result.expiry}"
             )
 
-        return f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, Expiry: {card.expiry}"
+        # Fallback for non-card gateways
+        return f"Spend approved. Ref: {spend_result.gateway_ref}"
 
-    def complete_spend(self, request_id: str, approved: bool) -> str:
+    def complete_spend(
+        self,
+        request_id: str,
+        approved: bool,
+        gateway: str = "default",
+    ) -> str:
         """Resume a spend that was paused for human Slack approval.
 
         Call this after catching ``HumanApprovalRequired`` from
@@ -191,25 +344,27 @@ class AgentWallet:
             request_id: The ``request_id`` from the ``HumanApprovalRequired``
                 exception.
             approved: ``True`` to approve the spend, ``False`` to deny it.
+            gateway: Name of the gateway that initiated the approval.
 
         Returns:
             Card details string if approved (same format as ``request_spend``).
 
         Raises:
-            GatewayError: If no ``SlackApprovalGateway`` is configured.
+            GatewayError: If the gateway is not a ``SlackApprovalGateway``.
             SpendDeniedError: If ``approved`` is ``False``.
         """
-        if not isinstance(self.gateway, SlackApprovalGateway):
+        gw = self._resolve_gateway(gateway)
+        if not isinstance(gw, SlackApprovalGateway):
             raise GatewayError("complete_spend requires a SlackApprovalGateway.")
 
         # Peek at pending metadata before complete_spend() pops it
-        pending = self.gateway.get_pending(request_id)
+        pending = gw.get_pending(request_id)
         amount = pending["amount_cents"] / 100
         vendor = pending["vendor"]
         justification = pending["justification"]
 
         try:
-            card = self.gateway.complete_spend(request_id, approved)
+            card = gw.complete_spend(request_id, approved)
         except SpendDeniedError:
             self._audit.log(
                 AuditRecord.now(
@@ -241,7 +396,10 @@ class AgentWallet:
                 f"SPT approved. Token: {card.gateway_ref} (spend limit: ${amount:.2f})"
             )
 
-        return f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, Expiry: {card.expiry}"
+        if isinstance(card, CardResult):
+            return f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, Expiry: {card.expiry}"
+
+        return f"Spend approved. Ref: {card.gateway_ref}"
 
     @cached_property
     def spend_tool(self):
@@ -295,6 +453,7 @@ class AgentWallet:
         method: str = "GET",
         headers: dict | None = None,
         body: str | None = None,
+        gateway: str = "x402",
     ) -> str:
         """Make a policy-checked x402 payment to a paid HTTP endpoint (sync).
 
@@ -311,6 +470,7 @@ class AgentWallet:
             method: HTTP method (default ``"GET"``).
             headers: Optional additional HTTP headers.
             body: Optional request body string.
+            gateway: Name of the x402 gateway (default ``"x402"``).
 
         Returns:
             The response body from the paid resource.
@@ -320,87 +480,17 @@ class AgentWallet:
             PolicyViolationError: If the policy engine denies the request.
             SpendDeniedError: If a human denies the request (MockX402Gateway).
         """
-        if self.x402_gateway is None:
-            raise GatewayError(
-                "No x402 gateway configured. Pass x402_gateway to AgentWallet."
-            )
+        kwargs: dict = {"url": url, "method": method}
+        if headers:
+            kwargs["headers"] = headers
+        if body:
+            kwargs["body"] = body
 
-        on_check = (
-            self._audit.start_request(amount, vendor) if self._audit.verbose else None
-        )
-        result = self.policy_engine.evaluate(
-            amount, vendor, justification, on_check=on_check
+        spend_result = self._execute_with_policy(
+            gateway, amount, vendor, justification, **kwargs
         )
 
-        if not result.approved:
-            self._audit.log(
-                AuditRecord.now(
-                    agent_id=self.agent_id,
-                    amount=amount,
-                    vendor=vendor,
-                    justification=justification,
-                    policy_result="denied",
-                    denial_reason=result.denial_reason,
-                    checks_passed=result.checks_passed,
-                )
-            )
-            raise PolicyViolationError(result.denial_reason)
-
-        amount_cents = int(round(amount * 100))
-        try:
-            receipt = self.x402_gateway.execute_x402(
-                url,
-                amount_cents,
-                vendor,
-                justification,
-                method=method,
-                headers=headers,
-                body=body,
-            )
-        except SpendDeniedError:
-            self._audit.log(
-                AuditRecord.now(
-                    agent_id=self.agent_id,
-                    amount=amount,
-                    vendor=vendor,
-                    justification=justification,
-                    policy_result="denied",
-                    denial_reason="Human denied the x402 payment request",
-                    checks_passed=result.checks_passed,
-                )
-            )
-            raise
-        except Exception as e:
-            self._audit.log(
-                AuditRecord.now(
-                    agent_id=self.agent_id,
-                    amount=amount,
-                    vendor=vendor,
-                    justification=justification,
-                    policy_result="denied",
-                    denial_reason=f"Gateway error: {e}",
-                    checks_passed=result.checks_passed,
-                )
-            )
-            raise GatewayError(str(e)) from e
-
-        # Gateway succeeded — now it is safe to commit the spend to the budget
-        self.policy_engine.commit_spend(amount)
-
-        self._audit.log(
-            AuditRecord.now(
-                agent_id=self.agent_id,
-                amount=amount,
-                vendor=vendor,
-                justification=justification,
-                policy_result="approved",
-                checks_passed=result.checks_passed,
-                gateway_ref=receipt.gateway_ref,
-                gateway_type=receipt.gateway_type,
-            )
-        )
-
-        return receipt.response_body
+        return spend_result.response_body
 
     async def request_x402_async(
         self,
@@ -411,6 +501,7 @@ class AgentWallet:
         method: str = "GET",
         headers: dict | None = None,
         body: str | None = None,
+        gateway: str = "x402",
     ) -> str:
         """Make a policy-checked x402 payment to a paid HTTP endpoint (async).
 
@@ -426,6 +517,7 @@ class AgentWallet:
             method: HTTP method (default ``"GET"``).
             headers: Optional additional HTTP headers.
             body: Optional request body string.
+            gateway: Name of the x402 gateway (default ``"x402"``).
 
         Returns:
             The response body from the paid resource.
@@ -435,87 +527,17 @@ class AgentWallet:
             PolicyViolationError: If the policy engine denies the request.
             SpendDeniedError: If a human denies the request (MockX402Gateway).
         """
-        if self.x402_gateway is None:
-            raise GatewayError(
-                "No x402 gateway configured. Pass x402_gateway to AgentWallet."
-            )
+        kwargs: dict = {"url": url, "method": method}
+        if headers:
+            kwargs["headers"] = headers
+        if body:
+            kwargs["body"] = body
 
-        on_check = (
-            self._audit.start_request(amount, vendor) if self._audit.verbose else None
-        )
-        result = self.policy_engine.evaluate(
-            amount, vendor, justification, on_check=on_check
+        spend_result = await self._execute_with_policy_async(
+            gateway, amount, vendor, justification, **kwargs
         )
 
-        if not result.approved:
-            self._audit.log(
-                AuditRecord.now(
-                    agent_id=self.agent_id,
-                    amount=amount,
-                    vendor=vendor,
-                    justification=justification,
-                    policy_result="denied",
-                    denial_reason=result.denial_reason,
-                    checks_passed=result.checks_passed,
-                )
-            )
-            raise PolicyViolationError(result.denial_reason)
-
-        amount_cents = int(round(amount * 100))
-
-        try:
-            receipt = await self.x402_gateway.execute_x402_async(
-                url,
-                amount_cents,
-                vendor,
-                justification,
-                method=method,
-                headers=headers,
-                body=body,
-            )
-        except SpendDeniedError:
-            self._audit.log(
-                AuditRecord.now(
-                    agent_id=self.agent_id,
-                    amount=amount,
-                    vendor=vendor,
-                    justification=justification,
-                    policy_result="denied",
-                    denial_reason="Human denied the x402 payment request",
-                    checks_passed=result.checks_passed,
-                )
-            )
-            raise
-        except Exception as e:
-            self._audit.log(
-                AuditRecord.now(
-                    agent_id=self.agent_id,
-                    amount=amount,
-                    vendor=vendor,
-                    justification=justification,
-                    policy_result="denied",
-                    denial_reason=f"Gateway error: {e}",
-                    checks_passed=result.checks_passed,
-                )
-            )
-            raise GatewayError(str(e)) from e
-
-        self.policy_engine.commit_spend(amount)
-
-        self._audit.log(
-            AuditRecord.now(
-                agent_id=self.agent_id,
-                amount=amount,
-                vendor=vendor,
-                justification=justification,
-                policy_result="approved",
-                checks_passed=result.checks_passed,
-                gateway_ref=receipt.gateway_ref,
-                gateway_type=receipt.gateway_type,
-            )
-        )
-
-        return receipt.response_body
+        return spend_result.response_body
 
     @cached_property
     def crewai_tool(self):
@@ -560,7 +582,7 @@ class AgentWallet:
         """LangChain-compatible tool for x402 HTTP payments.
 
         Returns a ``@tool``-decorated function usable in LangGraph agents.
-        Requires ``langchain-core`` and an ``x402_gateway`` to be configured.
+        Requires ``langchain-core`` and an x402 gateway to be configured.
         """
         return self._build_x402_tool()
 

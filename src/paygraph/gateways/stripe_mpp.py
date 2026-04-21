@@ -8,7 +8,7 @@ Requires Stripe **machine payments / agentic commerce** access and API version
 ``2026-03-04.preview``. See https://docs.stripe.com/payments/machine/mpp and
 https://docs.stripe.com/agentic-commerce/concepts/shared-payment-tokens
 
-``VirtualCard`` is used for API compatibility only: SPTs have no PAN/CVV.
+``CardResult`` is used for API compatibility only: SPTs have no PAN/CVV.
 Integrators should use ``gateway_ref`` (the ``spt_...`` id) when talking to
 merchants, not the sentinel ``pan``/``cvv``/``expiry`` fields.
 """
@@ -20,7 +20,7 @@ import time
 import httpx
 
 from paygraph.exceptions import GatewayError
-from paygraph.gateways.base import BaseGateway, VirtualCard
+from paygraph.gateways.base import BaseGateway, CardResult
 
 # Preview REST paths — confirm against Stripe preview API reference if calls fail.
 _ISSUE_PATH = "/v1/shared_payment/issued_tokens"
@@ -106,7 +106,7 @@ class StripeMPPGateway(BaseGateway):
         self._currency = currency.lower()
         self._expires_in_seconds = expires_in_seconds
 
-    def execute_spend(self, amount_cents: int, vendor: str, memo: str) -> VirtualCard:
+    def execute(self, amount_cents: int, vendor: str, memo: str, **kwargs) -> CardResult:
         """Issue an SPT with usage limits matching this spend request.
 
         Metadata truncation matches ``StripeCardGateway`` (vendor 100 chars, memo 500).
@@ -140,11 +140,12 @@ class StripeMPPGateway(BaseGateway):
                 "Stripe API returned no token id for shared payment issuance"
             )
 
-        return VirtualCard(
+        return CardResult(
             pan=self._SPT_PAN,
             cvv=self._SPT_CVV,
             expiry=self._SPT_EXPIRY,
             spend_limit_cents=amount_cents,
+            amount_cents=amount_cents,
             gateway_ref=token_id,
             gateway_type=self._gateway_type,
         )

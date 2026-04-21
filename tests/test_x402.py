@@ -5,8 +5,9 @@ import tempfile
 import pytest
 
 from paygraph.exceptions import GatewayError, PolicyViolationError, SpendDeniedError
+from paygraph.gateways.base import BaseGateway, X402Result
 from paygraph.gateways.mock_x402 import MockX402Gateway
-from paygraph.gateways.x402 import X402Gateway, X402Receipt
+from paygraph.gateways.x402 import X402Gateway
 from paygraph.policy import SpendPolicy
 from paygraph.wallet import AgentWallet
 
@@ -17,14 +18,15 @@ from paygraph.wallet import AgentWallet
 
 def _fake_receipt(
     url: str = "https://api.example.com", amount_cents: int = 100
-) -> X402Receipt:
-    return X402Receipt(
+) -> X402Result:
+    return X402Result(
         url=url,
         amount_cents=amount_cents,
         network="eip155:8453",
         transaction_hash="0xfakehash",
         payer="0xFakePayer",
         gateway_ref="0xfakehash",
+        gateway_type="x402",
     )
 
 
@@ -34,26 +36,27 @@ class _FakeX402Gateway(X402Gateway):
     def __init__(self) -> None:
         self._payer = "0xFakePayer"
 
-    async def execute_x402_async(
+    async def execute_async(
         self,
-        url: str,
         amount_cents: int,
         vendor: str,
         memo: str,
-        method: str = "GET",
-        headers: dict | None = None,
-        body: str | None = None,
-    ) -> X402Receipt:
+        **kwargs,
+    ) -> X402Result:
+        url = kwargs.get("url", "https://api.example.com")
         return _fake_receipt(url, amount_cents)
 
 
-def _make_wallet(x402_gateway=None, policy=None, **kwargs) -> tuple[AgentWallet, str]:
+def _make_wallet(
+    x402_gateway=None, policy=None, **kwargs
+) -> tuple[AgentWallet, str]:
     """Create a wallet with x402 gateway and a temp audit file."""
     f = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
     f.close()
+    gw = x402_gateway if x402_gateway is not None else MockX402Gateway(auto_approve=True)
     return (
         AgentWallet(
-            x402_gateway=x402_gateway or MockX402Gateway(auto_approve=True),
+            gateways={"default": MockX402Gateway(auto_approve=True), "x402": gw},
             policy=policy or SpendPolicy(),
             log_path=f.name,
             verbose=False,
@@ -71,10 +74,11 @@ def _read_audit(path: str) -> list[dict]:
 class TestMockX402Gateway:
     def test_returns_receipt(self):
         gw = MockX402Gateway(auto_approve=True, response_body='{"result": "ok"}')
-        receipt = gw.execute_x402(
-            "https://api.example.com/data", 500, "ExampleAPI", "need data"
+        receipt = gw.execute(
+            500, "ExampleAPI", "need data",
+            url="https://api.example.com/data",
         )
-        assert isinstance(receipt, X402Receipt)
+        assert isinstance(receipt, X402Result)
         assert receipt.url == "https://api.example.com/data"
         assert receipt.amount_cents == 500
         assert receipt.gateway_type == "x402"
@@ -86,12 +90,12 @@ class TestMockX402Gateway:
         monkeypatch.setattr("builtins.input", lambda _: "n")
         gw = MockX402Gateway(auto_approve=False)
         with pytest.raises(SpendDeniedError, match="Human denied"):
-            gw.execute_x402("https://api.example.com", 100, "vendor", "reason")
+            gw.execute(100, "vendor", "reason", url="https://api.example.com")
 
     def test_human_approval(self, monkeypatch):
         monkeypatch.setattr("builtins.input", lambda _: "y")
         gw = MockX402Gateway(auto_approve=False)
-        receipt = gw.execute_x402("https://api.example.com", 100, "vendor", "reason")
+        receipt = gw.execute(100, "vendor", "reason", url="https://api.example.com")
         assert receipt.status_code == 200
 
 
@@ -155,8 +159,8 @@ class TestRequestX402HumanDenial:
 
 class TestRequestX402GatewayError:
     def test_raises_gateway_error(self):
-        class BrokenX402Gateway:
-            def execute_x402(self, *args, **kwargs):
+        class BrokenX402Gateway(BaseGateway):
+            def execute(self, amount_cents, vendor, memo, **kwargs):
                 raise RuntimeError("connection refused")
 
         wallet, _ = _make_wallet(x402_gateway=BrokenX402Gateway())
@@ -166,8 +170,6 @@ class TestRequestX402GatewayError:
 
 class TestRequestX402NoGateway:
     def test_raises_when_no_x402_gateway(self):
-        wallet, _ = _make_wallet(x402_gateway=None)
-        # Override — _make_wallet defaults to MockX402Gateway, so make one without
         f = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
         f.close()
         wallet = AgentWallet(
@@ -175,7 +177,7 @@ class TestRequestX402NoGateway:
             log_path=f.name,
             verbose=False,
         )
-        with pytest.raises(GatewayError, match="No x402 gateway configured"):
+        with pytest.raises(GatewayError, match="No gateway named 'x402'"):
             wallet.request_x402("https://api.example.com", 4.20, "vendor", "reason")
 
 
@@ -211,41 +213,41 @@ class TestRequestX402HttpMethod:
 
 
 class TestX402GatewaySyncDispatch:
-    """execute_x402() must work both with and without a running event loop."""
+    """execute() must work both with and without a running event loop."""
 
     def test_sync_call_without_running_loop(self):
         """Standard sync call (scripts, CLI) should return a receipt via asyncio.run()."""
         gw = _FakeX402Gateway()
-        result = gw.execute_x402("https://api.example.com", 100, "vendor", "memo")
-        assert isinstance(result, X402Receipt)
+        result = gw.execute(100, "vendor", "memo", url="https://api.example.com")
+        assert isinstance(result, X402Result)
         assert result.url == "https://api.example.com"
         assert result.amount_cents == 100
         assert result.transaction_hash == "0xfakehash"
 
     def test_sync_call_from_running_loop_does_not_raise(self):
-        """execute_x402() called from within a running loop must not raise RuntimeError.
+        """execute() called from within a running loop must not raise RuntimeError.
 
         Simulates the LangGraph / FastAPI scenario where an event loop is already
         running in the current thread when the sync method is invoked.
         """
         gw = _FakeX402Gateway()
 
-        async def call_sync_inside_loop() -> X402Receipt:
+        async def call_sync_inside_loop() -> X402Result:
             # Deliberately calls the *sync* wrapper from inside a coroutine to
             # replicate the nested-loop scenario.
-            return gw.execute_x402("https://api.example.com", 200, "vendor", "memo")
+            return gw.execute(200, "vendor", "memo", url="https://api.example.com")
 
         result = asyncio.run(call_sync_inside_loop())
-        assert isinstance(result, X402Receipt)
+        assert isinstance(result, X402Result)
         assert result.amount_cents == 200
 
     def test_sync_call_from_running_loop_returns_correct_receipt(self):
         """Receipt fields survive the thread-pool round-trip intact."""
         gw = _FakeX402Gateway()
 
-        async def call_sync_inside_loop() -> X402Receipt:
-            return gw.execute_x402(
-                "https://paid-api.example.com", 499, "PaidAPI", "data"
+        async def call_sync_inside_loop() -> X402Result:
+            return gw.execute(
+                499, "PaidAPI", "data", url="https://paid-api.example.com"
             )
 
         result = asyncio.run(call_sync_inside_loop())
@@ -255,14 +257,14 @@ class TestX402GatewaySyncDispatch:
         assert result.gateway_ref == "0xfakehash"
 
     def test_async_method_available(self):
-        """execute_x402_async() is directly awaitable for fully-async callers."""
+        """execute_async() is directly awaitable for fully-async callers."""
         gw = _FakeX402Gateway()
 
         async def run():
-            return await gw.execute_x402_async(
-                "https://api.example.com", 50, "vendor", "memo"
+            return await gw.execute_async(
+                50, "vendor", "memo", url="https://api.example.com"
             )
 
         result = asyncio.run(run())
-        assert isinstance(result, X402Receipt)
+        assert isinstance(result, X402Result)
         assert result.amount_cents == 50
