@@ -17,6 +17,8 @@ class SpendPolicy:
         allowed_mccs: Merchant Category Code allowlist (reserved for future use).
         require_justification: Whether a justification string is required
             for every spend request.
+        require_human_approval_above: If set, spends above this dollar amount
+            require human approval via Slack before the gateway is called.
     """
 
     max_transaction: float = 50.0
@@ -25,6 +27,7 @@ class SpendPolicy:
     blocked_vendors: list[str] | None = None
     allowed_mccs: list[int] | None = None
     require_justification: bool = True
+    require_human_approval_above: float | None = None
 
 
 @dataclass
