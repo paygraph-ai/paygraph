@@ -30,6 +30,8 @@ class SpendPolicy:
             roll over to the next period of the same type.
         rollover_periods: List of period types that support rollover.
             Valid values: "hourly", "daily", "weekly", "monthly".
+        require_human_approval_above: If set, spends above this dollar amount
+            require human approval via Slack before the gateway is called.
     """
 
     max_transaction: float = 50.0
@@ -47,6 +49,7 @@ class SpendPolicy:
     # Rollover configuration
     enable_rollover: bool = False
     rollover_periods: list[str] = field(default_factory=lambda: ["daily", "weekly", "monthly"])
+    require_human_approval_above: float | None = None
 
 
 @dataclass
@@ -280,3 +283,15 @@ class PolicyEngine:
         self._record_time_based_spending(amount)
 
         return PolicyResult(approved=True, checks_passed=checks_passed)
+
+    def commit_spend(self, amount: float) -> None:
+        """Permanently record a spend against the daily budget.
+
+        Must be called only after a successful gateway transaction so that a
+        gateway failure does not silently consume the agent's daily budget.
+
+        Args:
+            amount: Dollar amount that was successfully spent.
+        """
+        self._reset_daily_if_needed()
+        self._daily_spend += amount

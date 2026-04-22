@@ -31,6 +31,20 @@ class MockX402Gateway:
         self.content_type = content_type
         self._receipts: dict[str, X402Receipt] = {}
 
+    async def execute_x402_async(
+        self,
+        url: str,
+        amount_cents: int,
+        vendor: str,
+        memo: str,
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str | None = None,
+    ) -> X402Receipt:
+        return self.execute_x402(
+            url, amount_cents, vendor, memo, method=method, headers=headers, body=body
+        )
+
     def execute_x402(
         self,
         url: str,
