@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import concurrent.futures
 import json
 from dataclasses import dataclass
 
@@ -84,7 +85,7 @@ class X402Gateway:
             if not evm_private_key:
                 self._payer = str(svm_signer.address)
 
-    async def _execute(
+    async def execute_x402_async(
         self,
         url: str,
         amount_cents: int,
@@ -94,6 +95,28 @@ class X402Gateway:
         headers: dict | None = None,
         body: str | None = None,
     ) -> X402Receipt:
+        """Make a paid HTTP request via the x402 protocol (async).
+
+        Use this coroutine directly from async contexts such as LangGraph
+        agents, FastAPI handlers, or Jupyter notebooks where an event loop
+        is already running. Calling the synchronous :meth:`execute_x402`
+        from those contexts will raise ``RuntimeError``.
+
+        Args:
+            url: The x402-enabled endpoint URL.
+            amount_cents: Payment amount in cents.
+            vendor: Name of the vendor or service.
+            memo: Justification or memo for the payment.
+            method: HTTP method (default ``"GET"``).
+            headers: Optional additional HTTP headers.
+            body: Optional request body string.
+
+        Returns:
+            An ``X402Receipt`` with the response body and transaction details.
+
+        Raises:
+            RuntimeError: If the x402 payment fails (still 402 after retry).
+        """
         from x402.http.clients import x402HttpxClient
 
         async with x402HttpxClient(self._client) as http:
@@ -152,11 +175,15 @@ class X402Gateway:
         headers: dict | None = None,
         body: str | None = None,
     ) -> X402Receipt:
-        """Make a paid HTTP request via the x402 protocol.
+        """Make a paid HTTP request via the x402 protocol (sync).
 
-        Synchronous wrapper around the async x402 client. Sends the
-        request, handles the 402 payment challenge, and returns the
-        final response.
+        Synchronous wrapper around :meth:`execute_x402_async`. Safe to call
+        from any context — including scripts, CLI, and environments with a
+        running event loop (LangGraph agents, FastAPI handlers, Jupyter
+        notebooks). When a loop is already running in the current thread, the
+        call is automatically dispatched to a worker thread with its own fresh
+        event loop. For fully-async callers that prefer to avoid the thread
+        overhead, ``await gateway.execute_x402_async(...)`` is also available.
 
         Args:
             url: The x402-enabled endpoint URL.
@@ -173,6 +200,21 @@ class X402Gateway:
         Raises:
             RuntimeError: If the x402 payment fails (still 402 after retry).
         """
-        return asyncio.run(
-            self._execute(url, amount_cents, vendor, memo, method, headers, body)
+        coro = self.execute_x402_async(
+            url, amount_cents, vendor, memo, method, headers, body
         )
+
+        try:
+            asyncio.get_running_loop()
+            running = True
+        except RuntimeError:
+            running = False
+
+        if running:
+            # A loop is already running in this thread (LangGraph, FastAPI, Jupyter,
+            # etc.). Dispatch to a worker thread so asyncio.run() can create a fresh
+            # event loop there without interfering with the caller's loop.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, coro).result()
+
+        return asyncio.run(coro)

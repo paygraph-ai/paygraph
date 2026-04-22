@@ -1,5 +1,6 @@
 from paygraph.exceptions import (
     GatewayError,
+    HumanApprovalRequired,
     PayGraphError,
     PolicyViolationError,
     SpendDeniedError,
@@ -7,6 +8,7 @@ from paygraph.exceptions import (
 from paygraph.gateways.base import BaseGateway, VirtualCard
 from paygraph.gateways.mock import MockGateway
 from paygraph.gateways.mock_x402 import MockX402Gateway
+from paygraph.gateways.slack import SlackApprovalGateway
 from paygraph.gateways.stripe import StripeCardGateway
 from paygraph.gateways.stripe_mpp import StripeMPPGateway
 from paygraph.gateways.x402 import X402Gateway, X402Receipt
@@ -21,6 +23,7 @@ __all__ = [
     "StripeCardGateway",
     "StripeMPPGateway",
     "MockGateway",
+    "SlackApprovalGateway",
     "X402Gateway",
     "X402Receipt",
     "MockX402Gateway",
@@ -28,4 +31,5 @@ __all__ = [
     "SpendDeniedError",
     "PolicyViolationError",
     "GatewayError",
+    "HumanApprovalRequired",
 ]

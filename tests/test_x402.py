@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 
@@ -5,9 +6,45 @@ import pytest
 
 from paygraph.exceptions import GatewayError, PolicyViolationError, SpendDeniedError
 from paygraph.gateways.mock_x402 import MockX402Gateway
-from paygraph.gateways.x402 import X402Receipt
+from paygraph.gateways.x402 import X402Gateway, X402Receipt
 from paygraph.policy import SpendPolicy
 from paygraph.wallet import AgentWallet
+
+# ---------------------------------------------------------------------------
+# Helpers shared by X402Gateway dispatch tests
+# ---------------------------------------------------------------------------
+
+
+def _fake_receipt(
+    url: str = "https://api.example.com", amount_cents: int = 100
+) -> X402Receipt:
+    return X402Receipt(
+        url=url,
+        amount_cents=amount_cents,
+        network="eip155:8453",
+        transaction_hash="0xfakehash",
+        payer="0xFakePayer",
+        gateway_ref="0xfakehash",
+    )
+
+
+class _FakeX402Gateway(X402Gateway):
+    """Minimal X402Gateway that skips SDK imports and returns a fake receipt."""
+
+    def __init__(self) -> None:
+        self._payer = "0xFakePayer"
+
+    async def execute_x402_async(
+        self,
+        url: str,
+        amount_cents: int,
+        vendor: str,
+        memo: str,
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str | None = None,
+    ) -> X402Receipt:
+        return _fake_receipt(url, amount_cents)
 
 
 def _make_wallet(x402_gateway=None, policy=None, **kwargs) -> tuple[AgentWallet, str]:
@@ -166,3 +203,66 @@ class TestRequestX402HttpMethod:
             body='{"name": "test"}',
         )
         assert result == '{"created": true}'
+
+
+# ---------------------------------------------------------------------------
+# X402Gateway sync dispatch tests
+# ---------------------------------------------------------------------------
+
+
+class TestX402GatewaySyncDispatch:
+    """execute_x402() must work both with and without a running event loop."""
+
+    def test_sync_call_without_running_loop(self):
+        """Standard sync call (scripts, CLI) should return a receipt via asyncio.run()."""
+        gw = _FakeX402Gateway()
+        result = gw.execute_x402("https://api.example.com", 100, "vendor", "memo")
+        assert isinstance(result, X402Receipt)
+        assert result.url == "https://api.example.com"
+        assert result.amount_cents == 100
+        assert result.transaction_hash == "0xfakehash"
+
+    def test_sync_call_from_running_loop_does_not_raise(self):
+        """execute_x402() called from within a running loop must not raise RuntimeError.
+
+        Simulates the LangGraph / FastAPI scenario where an event loop is already
+        running in the current thread when the sync method is invoked.
+        """
+        gw = _FakeX402Gateway()
+
+        async def call_sync_inside_loop() -> X402Receipt:
+            # Deliberately calls the *sync* wrapper from inside a coroutine to
+            # replicate the nested-loop scenario.
+            return gw.execute_x402("https://api.example.com", 200, "vendor", "memo")
+
+        result = asyncio.run(call_sync_inside_loop())
+        assert isinstance(result, X402Receipt)
+        assert result.amount_cents == 200
+
+    def test_sync_call_from_running_loop_returns_correct_receipt(self):
+        """Receipt fields survive the thread-pool round-trip intact."""
+        gw = _FakeX402Gateway()
+
+        async def call_sync_inside_loop() -> X402Receipt:
+            return gw.execute_x402(
+                "https://paid-api.example.com", 499, "PaidAPI", "data"
+            )
+
+        result = asyncio.run(call_sync_inside_loop())
+        assert result.url == "https://paid-api.example.com"
+        assert result.amount_cents == 499
+        assert result.payer == "0xFakePayer"
+        assert result.gateway_ref == "0xfakehash"
+
+    def test_async_method_available(self):
+        """execute_x402_async() is directly awaitable for fully-async callers."""
+        gw = _FakeX402Gateway()
+
+        async def run():
+            return await gw.execute_x402_async(
+                "https://api.example.com", 50, "vendor", "memo"
+            )
+
+        result = asyncio.run(run())
+        assert isinstance(result, X402Receipt)
+        assert result.amount_cents == 50
