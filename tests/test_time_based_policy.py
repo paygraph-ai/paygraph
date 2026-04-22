@@ -261,9 +261,9 @@ class TestTimeBudgetPolicyBasics:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
             result = engine.evaluate(30.0, "vendor", "reason")
-        
-        assert result.approved
-        assert "hourly_budget" in result.checks_passed
+            assert result.approved
+            assert "hourly_budget" in result.checks_passed
+            engine.commit_spend(30.0)
         
         # Second transaction should fail (would exceed hourly budget)
         with patch('paygraph.time_periods.datetime') as mock_dt, \
@@ -279,7 +279,7 @@ class TestTimeBudgetPolicyBasics:
     def test_weekly_budget_enforcement(self):
         """Test weekly budget is enforced."""
         policy = SpendPolicy(
-            max_transaction=200.0,  # Increased to allow test transactions
+            max_transaction=200.0,
             daily_budget=1000.0,
             weekly_budget=200.0
         )
@@ -291,9 +291,9 @@ class TestTimeBudgetPolicyBasics:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)  # Monday
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
             result = engine.evaluate(150.0, "vendor", "reason")
-        
-        assert result.approved
-        assert "weekly_budget" in result.checks_passed
+            assert result.approved
+            assert "weekly_budget" in result.checks_passed
+            engine.commit_spend(150.0)
         
         # Second transaction should fail (would exceed weekly budget)
         with patch('paygraph.time_periods.datetime') as mock_dt, \
@@ -308,8 +308,8 @@ class TestTimeBudgetPolicyBasics:
     def test_monthly_budget_enforcement(self):
         """Test monthly budget is enforced."""
         policy = SpendPolicy(
-            max_transaction=1500.0,  # Increased to allow test transactions
-            daily_budget=2000.0,      # Increased to allow test transactions
+            max_transaction=1500.0,
+            daily_budget=2000.0,
             monthly_budget=1500.0
         )
         engine = PolicyEngine(policy)
@@ -320,9 +320,9 @@ class TestTimeBudgetPolicyBasics:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
             result = engine.evaluate(1200.0, "vendor", "reason")
-        
-        assert result.approved
-        assert "monthly_budget" in result.checks_passed
+            assert result.approved
+            assert "monthly_budget" in result.checks_passed
+            engine.commit_spend(1200.0)
         
         # Second transaction should fail (would exceed monthly budget)
         with patch('paygraph.time_periods.datetime') as mock_dt, \
@@ -358,8 +358,8 @@ class TestRolloverFunctionality:
     def test_simple_rollover_daily_to_weekly(self):
         """Test simple rollover from one period to next."""
         policy = SpendPolicy(
-            max_transaction=600.0,  # Increased to allow large transactions
-            daily_budget=1000.0,     # Increased 
+            max_transaction=600.0,
+            daily_budget=1000.0,
             weekly_budget=500.0,
             enable_rollover=True,
             rollover_periods=["weekly"]
@@ -372,25 +372,25 @@ class TestRolloverFunctionality:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)  # Monday
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
             result = engine.evaluate(60.0, "vendor", "reason")
-        assert result.approved
+            assert result.approved
+            engine.commit_spend(60.0)
         
         # Move to next week - should have rollover from previous week
+        # 440 rollover + 500 new budget = 940 total
         with patch('paygraph.time_periods.datetime') as mock_dt, \
              patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = datetime(2024, 1, 22, 10, 0, 0)  # Next Monday
             mock_policy_dt.now.return_value = datetime(2024, 1, 22, 10, 0, 0)
-            
-            # This should succeed because we have 440 rollover + 500 new budget = 940 total
             result = engine.evaluate(530.0, "vendor", "reason")
+            assert result.approved
+            engine.commit_spend(530.0)
         
-        assert result.approved
-        
-        # But spending more should fail (we have 410 left: 940 - 530 = 410, so try 420)
+        # 940 - 530 = 410 remaining, so 420 should fail
         with patch('paygraph.time_periods.datetime') as mock_dt, \
              patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = datetime(2024, 1, 22, 11, 0, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 22, 11, 0, 0)
-            result = engine.evaluate(420.0, "vendor", "reason")  # 420 > 410 remaining
+            result = engine.evaluate(420.0, "vendor", "reason")
         
         assert not result.approved
         assert "Weekly budget exhausted" in result.denial_reason
@@ -398,10 +398,10 @@ class TestRolloverFunctionality:
     def test_rollover_disabled(self):
         """Test that rollover doesn't happen when disabled."""
         policy = SpendPolicy(
-            max_transaction=600.0,  # Increased to allow large transactions
+            max_transaction=600.0,
             daily_budget=1000.0,
             weekly_budget=500.0,
-            enable_rollover=False  # Disabled
+            enable_rollover=False
         )
         engine = PolicyEngine(policy)
         
@@ -411,15 +411,14 @@ class TestRolloverFunctionality:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
             result = engine.evaluate(60.0, "vendor", "reason")
-        assert result.approved
+            assert result.approved
+            engine.commit_spend(60.0)
         
-        # Move to next week - should not have rollover
+        # Move to next week - should not have rollover, only 500 budget
         with patch('paygraph.time_periods.datetime') as mock_dt, \
              patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = datetime(2024, 1, 22, 10, 0, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 22, 10, 0, 0)
-            
-            # This should fail because we only have 500 budget (no rollover)
             result = engine.evaluate(510.0, "vendor", "reason")
         
         assert not result.approved
@@ -428,8 +427,8 @@ class TestRolloverFunctionality:
     def test_rollover_period_not_in_list(self):
         """Test rollover doesn't happen for periods not in rollover_periods."""
         policy = SpendPolicy(
-            max_transaction=100.0,
-            daily_budget=100.0,
+            max_transaction=600.0,
+            daily_budget=1000.0,
             weekly_budget=500.0,
             enable_rollover=True,
             rollover_periods=["monthly"]  # Only monthly, not weekly
@@ -442,7 +441,8 @@ class TestRolloverFunctionality:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
             result = engine.evaluate(60.0, "vendor", "reason")
-        assert result.approved
+            assert result.approved
+            engine.commit_spend(60.0)
         
         # Move to next week - should not have rollover for weekly
         with patch('paygraph.time_periods.datetime') as mock_dt, \
@@ -460,9 +460,8 @@ class TestBackwardCompatibility:
     def test_existing_daily_budget_still_works(self):
         """Test that existing daily budget functionality is unchanged."""
         policy = SpendPolicy(
-            max_transaction=200.0,  # Increased to allow test transactions
+            max_transaction=200.0,
             daily_budget=200.0
-            # No time-based budgets
         )
         engine = PolicyEngine(policy)
         
@@ -470,6 +469,7 @@ class TestBackwardCompatibility:
         result = engine.evaluate(150.0, "vendor", "reason")
         assert result.approved
         assert "daily_budget" in result.checks_passed
+        engine.commit_spend(150.0)
         
         # Second transaction should fail (would exceed daily budget)
         result = engine.evaluate(75.0, "vendor", "reason")
@@ -541,7 +541,8 @@ class TestEdgeCases:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 59, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 59, 0)
             result = engine.evaluate(80.0, "vendor", "reason")
-        assert result.approved
+            assert result.approved
+            engine.commit_spend(80.0)
         
         # Spend in next hour - should have fresh budget
         with patch('paygraph.time_periods.datetime') as mock_dt, \
@@ -569,7 +570,8 @@ class TestEdgeCases:
             mock_dt.now.return_value = current_time
             mock_policy_dt.now.return_value = current_time
             result = engine.evaluate(80.0, "vendor", "reason")
-        assert result.approved
+            assert result.approved
+            engine.commit_spend(80.0)
         
         # Second transaction - should fail hourly budget
         with patch('paygraph.time_periods.datetime') as mock_dt, \
@@ -583,8 +585,8 @@ class TestEdgeCases:
     def test_very_large_rollover_amounts(self):
         """Test handling of large rollover amounts."""
         policy = SpendPolicy(
-            max_transaction=10000.0,  # Increased to allow large transactions
-            daily_budget=15000.0,     # Increased
+            max_transaction=10000.0,
+            daily_budget=15000.0,
             weekly_budget=5000.0,
             enable_rollover=True,
             rollover_periods=["weekly"]
@@ -597,7 +599,8 @@ class TestEdgeCases:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
             result = engine.evaluate(100.0, "vendor", "reason")
-        assert result.approved
+            assert result.approved
+            engine.commit_spend(100.0)
         
         # Next week should have large rollover (4900) + new budget (5000) = 9900
         with patch('paygraph.time_periods.datetime') as mock_dt, \
@@ -642,13 +645,14 @@ class TestPolicyEngineIntegration:
         
         current_time = datetime(2024, 1, 15, 14, 30, 0)
         
-        # Make a transaction to initialize periods
+        # Make a transaction to initialize periods and commit
         with patch('paygraph.time_periods.datetime') as mock_dt, \
              patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = current_time
             mock_policy_dt.now.return_value = current_time
             result = engine.evaluate(30.0, "vendor", "reason")
-        assert result.approved
+            assert result.approved
+            engine.commit_spend(30.0)
         
         # Get summaries
         hourly_summary = engine._period_tracker.get_period_summary("hourly", current_time)
