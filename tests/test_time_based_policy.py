@@ -437,14 +437,18 @@ class TestRolloverFunctionality:
         engine = PolicyEngine(policy)
         
         # Spend 60 in first week
-        with patch('paygraph.time_periods.datetime') as mock_dt:
+        with patch('paygraph.time_periods.datetime') as mock_dt, \
+             patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
+            mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 0, 0)
             result = engine.evaluate(60.0, "vendor", "reason")
         assert result.approved
         
         # Move to next week - should not have rollover for weekly
-        with patch('paygraph.time_periods.datetime') as mock_dt:
+        with patch('paygraph.time_periods.datetime') as mock_dt, \
+             patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = datetime(2024, 1, 22, 10, 0, 0)
+            mock_policy_dt.now.return_value = datetime(2024, 1, 22, 10, 0, 0)
             result = engine.evaluate(510.0, "vendor", "reason")
         
         assert not result.approved
@@ -560,14 +564,18 @@ class TestEdgeCases:
         current_time = datetime(2024, 1, 15, 14, 30, 0)
         
         # First transaction - should pass all checks
-        with patch('paygraph.time_periods.datetime') as mock_dt:
+        with patch('paygraph.time_periods.datetime') as mock_dt, \
+             patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = current_time
+            mock_policy_dt.now.return_value = current_time
             result = engine.evaluate(80.0, "vendor", "reason")
         assert result.approved
         
         # Second transaction - should fail hourly budget
-        with patch('paygraph.time_periods.datetime') as mock_dt:
+        with patch('paygraph.time_periods.datetime') as mock_dt, \
+             patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = current_time
+            mock_policy_dt.now.return_value = current_time
             result = engine.evaluate(30.0, "vendor", "reason")
         assert not result.approved
         assert "Hourly budget exhausted" in result.denial_reason
@@ -609,8 +617,10 @@ class TestEdgeCases:
         engine = PolicyEngine(policy)
         
         # Any spending should fail hourly budget
-        with patch('paygraph.time_periods.datetime') as mock_dt:
+        with patch('paygraph.time_periods.datetime') as mock_dt, \
+             patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
+            mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
             result = engine.evaluate(1.0, "vendor", "reason")
         
         assert not result.approved
@@ -664,8 +674,10 @@ class TestPolicyEngineIntegration:
         # Mock the cleanup method to verify it's called
         engine._period_tracker.cleanup_old_periods = Mock()
         
-        with patch('paygraph.time_periods.datetime') as mock_dt:
+        with patch('paygraph.time_periods.datetime') as mock_dt, \
+             patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
+            mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
             result = engine.evaluate(30.0, "vendor", "reason")
         
         # Cleanup should have been called
