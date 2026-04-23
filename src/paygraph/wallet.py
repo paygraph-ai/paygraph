@@ -3,6 +3,7 @@ from functools import cached_property
 from paygraph.audit import AuditLogger, AuditRecord
 from paygraph.exceptions import (
     GatewayError,
+    HumanApprovalRequired,
     PolicyViolationError,
     SpendDeniedError,
 )
@@ -143,9 +144,13 @@ class AgentWallet:
                     checks_passed=result.checks_passed,
                 )
             )
-            gw.request_approval(
-                amount_cents, vendor, justification, justification=justification
-            )
+            try:
+                gw.request_approval(
+                    amount_cents, vendor, justification, justification=justification
+                )
+            except HumanApprovalRequired as e:
+                e.gateway_name = gateway_name
+                raise
             # request_approval always raises HumanApprovalRequired — unreachable
 
         try:
@@ -345,6 +350,8 @@ class AgentWallet:
                 exception.
             approved: ``True`` to approve the spend, ``False`` to deny it.
             gateway: Name of the gateway that initiated the approval.
+                Use ``e.gateway_name`` from the ``HumanApprovalRequired``
+                exception to resolve the correct gateway.
 
         Returns:
             Card details string if approved (same format as ``request_spend``).

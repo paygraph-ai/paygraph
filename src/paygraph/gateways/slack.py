@@ -33,8 +33,10 @@ class SlackApprovalGateway(BaseGateway):
         try:
             wallet.request_spend(50.0, "Anthropic", "need tokens")
         except HumanApprovalRequired as e:
-            # Store e.request_id — resume later when human responds
-            result = wallet.complete_spend(e.request_id, approved=True)
+            # Store e.request_id and e.gateway_name — resume later when human responds
+            result = wallet.complete_spend(
+                e.request_id, approved=True, gateway=e.gateway_name
+            )
     """
 
     def __init__(self, webhook_url: str, inner_gateway: BaseGateway) -> None:

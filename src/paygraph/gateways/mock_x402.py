@@ -39,17 +39,27 @@ class MockX402Gateway(BaseGateway):
         amount_cents: int,
         vendor: str,
         memo: str,
-        **kwargs,
+        *,
+        url: str = "",
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str | None = None,
     ) -> X402Result:
         """Async variant — delegates to :meth:`execute`."""
-        return self.execute(amount_cents, vendor, memo, **kwargs)
+        return self.execute(
+            amount_cents, vendor, memo, url=url, method=method, headers=headers, body=body
+        )
 
     def execute(
         self,
         amount_cents: int,
         vendor: str,
         memo: str,
-        **kwargs,
+        *,
+        url: str = "",
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str | None = None,
     ) -> X402Result:
         """Simulate an x402 payment, optionally prompting for approval.
 
@@ -57,8 +67,10 @@ class MockX402Gateway(BaseGateway):
             amount_cents: Payment amount in cents.
             vendor: Name of the vendor.
             memo: Justification for the payment.
-            **kwargs: Expected to contain ``url``. Optional: ``method``,
-                ``headers``, ``body`` (ignored in mock).
+            url: The x402-enabled endpoint URL.
+            method: HTTP method (ignored in mock).
+            headers: Optional HTTP headers (ignored in mock).
+            body: Optional request body (ignored in mock).
 
         Returns:
             An ``X402Result`` with a fake transaction hash and the
@@ -67,7 +79,6 @@ class MockX402Gateway(BaseGateway):
         Raises:
             SpendDeniedError: If the human denies the approval prompt.
         """
-        url = kwargs.get("url", "")
         amount_dollars = amount_cents / 100
         if not self.auto_approve:
             response = input(

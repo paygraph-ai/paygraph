@@ -21,7 +21,7 @@ class MockGateway(BaseGateway):
         self.auto_approve = auto_approve
         self._cards: dict[str, CardResult] = {}
 
-    def execute(self, amount_cents: int, vendor: str, memo: str, **kwargs) -> CardResult:
+    def execute(self, amount_cents: int, vendor: str, memo: str) -> CardResult:
         """Create a mock virtual card, optionally prompting for approval.
 
         Args:

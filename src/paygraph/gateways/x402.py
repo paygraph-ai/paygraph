@@ -64,7 +64,11 @@ class X402Gateway(BaseGateway):
         amount_cents: int,
         vendor: str,
         memo: str,
-        **kwargs,
+        *,
+        url: str = "",
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str | None = None,
     ) -> X402Result:
         """Make a paid HTTP request via the x402 protocol (async).
 
@@ -77,8 +81,10 @@ class X402Gateway(BaseGateway):
             amount_cents: Payment amount in cents.
             vendor: Name of the vendor or service.
             memo: Justification or memo for the payment.
-            **kwargs: Must include ``url``. Optional: ``method`` (default ``"GET"``),
-                ``headers``, ``body``.
+            url: The x402-enabled endpoint URL.
+            method: HTTP method (default ``"GET"``).
+            headers: Optional additional HTTP headers.
+            body: Optional request body string.
 
         Returns:
             An ``X402Result`` with the response body and transaction details.
@@ -86,10 +92,6 @@ class X402Gateway(BaseGateway):
         Raises:
             RuntimeError: If the x402 payment fails (still 402 after retry).
         """
-        url = kwargs.get("url", "")
-        method = kwargs.get("method", "GET")
-        headers = kwargs.get("headers")
-        body = kwargs.get("body")
 
         from x402.http.clients import x402HttpxClient
 
@@ -145,7 +147,11 @@ class X402Gateway(BaseGateway):
         amount_cents: int,
         vendor: str,
         memo: str,
-        **kwargs,
+        *,
+        url: str = "",
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str | None = None,
     ) -> X402Result:
         """Make a paid HTTP request via the x402 protocol (sync).
 
@@ -161,8 +167,10 @@ class X402Gateway(BaseGateway):
             amount_cents: Payment amount in cents.
             vendor: Name of the vendor or service.
             memo: Justification or memo for the payment.
-            **kwargs: Must include ``url``. Optional: ``method`` (default ``"GET"``),
-                ``headers``, ``body``.
+            url: The x402-enabled endpoint URL.
+            method: HTTP method (default ``"GET"``).
+            headers: Optional additional HTTP headers.
+            body: Optional request body string.
 
         Returns:
             An ``X402Result`` with the response body and transaction details.
@@ -170,7 +178,9 @@ class X402Gateway(BaseGateway):
         Raises:
             RuntimeError: If the x402 payment fails (still 402 after retry).
         """
-        coro = self.execute_async(amount_cents, vendor, memo, **kwargs)
+        coro = self.execute_async(
+            amount_cents, vendor, memo, url=url, method=method, headers=headers, body=body
+        )
 
         try:
             asyncio.get_running_loop()

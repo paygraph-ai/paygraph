@@ -92,12 +92,14 @@ class BaseGateway(ABC):
     ) -> SpendResult:
         """Execute a spend for the given amount.
 
+        Subclasses should declare gateway-specific parameters as explicit
+        keyword-only arguments rather than consuming ``**kwargs``. This
+        ensures callers get immediate feedback on typos.
+
         Args:
             amount_cents: Spend amount in cents.
             vendor: Name of the vendor.
             memo: Justification or memo for the spend.
-            **kwargs: Gateway-specific parameters (e.g. ``url``, ``method``
-                for x402 gateways).
 
         Returns:
             A ``SpendResult`` (or subclass) with the transaction details.
@@ -116,7 +118,6 @@ class BaseGateway(ABC):
             amount_cents: Spend amount in cents.
             vendor: Name of the vendor.
             memo: Justification or memo for the spend.
-            **kwargs: Gateway-specific parameters.
 
         Returns:
             A ``SpendResult`` (or subclass) with the transaction details.

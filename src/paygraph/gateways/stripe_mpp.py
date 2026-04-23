@@ -106,7 +106,7 @@ class StripeMPPGateway(BaseGateway):
         self._currency = currency.lower()
         self._expires_in_seconds = expires_in_seconds
 
-    def execute(self, amount_cents: int, vendor: str, memo: str, **kwargs) -> CardResult:
+    def execute(self, amount_cents: int, vendor: str, memo: str) -> CardResult:
         """Issue an SPT with usage limits matching this spend request.
 
         Metadata truncation matches ``StripeCardGateway`` (vendor 100 chars, memo 500).

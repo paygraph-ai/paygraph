@@ -184,7 +184,7 @@ class StripeCardGateway(BaseGateway):
         except httpx.HTTPError as e:
             raise GatewayError(f"Stripe API unreachable: {e}") from e
 
-    def execute(self, amount_cents: int, vendor: str, memo: str, **kwargs) -> CardResult:
+    def execute(self, amount_cents: int, vendor: str, memo: str) -> CardResult:
         """Create a Stripe Issuing virtual card with the given spend limit.
 
         Calls the Stripe ``/v1/issuing/cards`` API to mint a new card
