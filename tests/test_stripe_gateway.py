@@ -3,7 +3,13 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from paygraph.exceptions import GatewayError
+from paygraph.exceptions import (
+    CardDeclinedError,
+    GatewayError,
+    InsufficientFundsError,
+    RateLimitedError,
+    StripeUnreachableError,
+)
 from paygraph.gateways.stripe import StripeCardGateway
 
 
@@ -311,6 +317,111 @@ class TestExecuteSpend:
         gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
         with pytest.raises(GatewayError, match="Stripe API unreachable"):
             gw.execute(420, "vendor", "memo")
+
+
+class TestTypedErrors:
+    @patch("paygraph.gateways.stripe.httpx.Client")
+    def test_card_declined_maps_to_typed_error(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        error_resp = _mock_response(
+            402,
+            {"error": {"message": "Card declined", "code": "card_declined"}},
+        )
+        mock_client.post.return_value = error_resp
+
+        gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
+        with pytest.raises(CardDeclinedError, match="Stripe card declined"):
+            gw.execute(420, "vendor", "memo")
+
+    @patch("paygraph.gateways.stripe.httpx.Client")
+    def test_insufficient_funds_maps_to_typed_error(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        error_resp = _mock_response(
+            402,
+            {"error": {"message": "Insufficient funds", "code": "insufficient_funds"}},
+        )
+        mock_client.post.return_value = error_resp
+
+        gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
+        with pytest.raises(
+            InsufficientFundsError, match="Stripe insufficient funds"
+        ):
+            gw.execute(420, "vendor", "memo")
+
+    @patch("paygraph.gateways.stripe.httpx.Client")
+    def test_rate_limit_429(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        error_resp = _mock_response(429, {"error": {"message": "Too many requests"}})
+        mock_client.post.return_value = error_resp
+
+        gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
+        with pytest.raises(RateLimitedError, match="Stripe rate limit"):
+            gw.execute(420, "vendor", "memo")
+
+    @patch("paygraph.gateways.stripe.httpx.Client")
+    def test_rate_limit_by_type(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        error_resp = _mock_response(
+            400,
+            {
+                "error": {
+                    "message": "Rate limited",
+                    "type": "rate_limit_error",
+                    "code": "rate_limited",
+                }
+            },
+        )
+        mock_client.post.return_value = error_resp
+
+        gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
+        with pytest.raises(RateLimitedError, match="Stripe rate limit"):
+            gw.execute(420, "vendor", "memo")
+
+    @patch("paygraph.gateways.stripe.httpx.Client")
+    def test_unreachable_maps_from_http_error(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.post.side_effect = httpx.ConnectError("connection refused")
+
+        gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
+        with pytest.raises(StripeUnreachableError, match="Stripe API unreachable"):
+            gw.execute(420, "vendor", "memo")
+
+    @patch("paygraph.gateways.stripe.httpx.Client")
+    def test_unknown_code_falls_back_to_gateway_error(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        error_resp = _mock_response(
+            400,
+            {"error": {"message": "Unknown Stripe error", "code": "new_error_code"}},
+        )
+        mock_client.post.return_value = error_resp
+
+        gw = StripeCardGateway(api_key="sk_test_xxx", cardholder_id="ich_xxx")
+        with pytest.raises(
+            GatewayError, match="Stripe API error: Unknown Stripe error"
+        ) as exc_info:
+            gw.execute(420, "vendor", "memo")
+        assert type(exc_info.value) is GatewayError
+
+    def test_typed_errors_are_gateway_error_subclasses(self):
+        assert isinstance(CardDeclinedError("declined"), GatewayError)
+        assert isinstance(InsufficientFundsError("insufficient"), GatewayError)
+        assert isinstance(RateLimitedError("rate limited"), GatewayError)
+        assert isinstance(StripeUnreachableError("unreachable"), GatewayError)
+
+    def test_stripe_code_preserved(self):
+        err = CardDeclinedError("declined", stripe_code="expired_card")
+        assert err.stripe_code == "expired_card"
 
 
 class TestRevoke:
