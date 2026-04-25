@@ -1,6 +1,12 @@
 import httpx
 
-from paygraph.exceptions import GatewayError
+from paygraph.exceptions import (
+    CardDeclinedError,
+    GatewayError,
+    InsufficientFundsError,
+    RateLimitedError,
+    StripeUnreachableError,
+)
 from paygraph.gateways.base import BaseGateway, CardResult
 
 _DEFAULT_BILLING = {
@@ -10,6 +16,47 @@ _DEFAULT_BILLING = {
     "postal_code": "94105",
     "country": "US",
 }
+
+_CARD_DECLINE_CODES = {
+    "card_declined",
+    "expired_card",
+    "incorrect_cvc",
+    "processing_error",
+}
+_INSUFFICIENT_FUNDS_CODES = {
+    "insufficient_funds",
+    "withdrawal_count_limit_exceeded",
+}
+
+
+def _map_stripe_error(error: httpx.HTTPError) -> GatewayError:
+    """Map Stripe HTTP errors to typed PayGraph gateway errors."""
+    if not isinstance(error, httpx.HTTPStatusError):
+        return StripeUnreachableError(f"Stripe API unreachable: {error}")
+
+    response = error.response
+    body: dict[str, str] = {}
+    try:
+        raw_error = response.json().get("error", {})
+        if isinstance(raw_error, dict):
+            body = {k: str(v) for k, v in raw_error.items() if isinstance(k, str)}
+    except ValueError:
+        body = {}
+
+    code = body.get("code")
+    error_type = body.get("type")
+    message = body.get("message", str(error))
+    status = response.status_code
+
+    if status == 429 or error_type == "rate_limit_error":
+        return RateLimitedError(f"Stripe rate limit: {message}", stripe_code=code)
+    if code in _INSUFFICIENT_FUNDS_CODES:
+        return InsufficientFundsError(
+            f"Stripe insufficient funds: {message}", stripe_code=code
+        )
+    if code in _CARD_DECLINE_CODES or error_type == "card_error":
+        return CardDeclinedError(f"Stripe card declined: {message}", stripe_code=code)
+    return GatewayError(f"Stripe API error: {message}")
 
 
 class StripeCardGateway(BaseGateway):
@@ -108,11 +155,8 @@ class StripeCardGateway(BaseGateway):
                 },
             )
             resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            msg = e.response.json().get("error", {}).get("message", str(e))
-            raise GatewayError(f"Stripe API error: {msg}") from e
         except httpx.HTTPError as e:
-            raise GatewayError(f"Stripe API unreachable: {e}") from e
+            raise _map_stripe_error(e) from e
 
         self._cardholder_id = resp.json()["id"]
         return self._cardholder_id
@@ -143,11 +187,8 @@ class StripeCardGateway(BaseGateway):
         try:
             resp = self._client.post("/v1/issuing/cards", data=card_data)
             resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            msg = e.response.json().get("error", {}).get("message", str(e))
-            raise GatewayError(f"Stripe API error: {msg}") from e
         except httpx.HTTPError as e:
-            raise GatewayError(f"Stripe API unreachable: {e}") from e
+            raise _map_stripe_error(e) from e
 
         card_id = resp.json()["id"]
         return self._get_card_detail(card_id)
@@ -160,11 +201,8 @@ class StripeCardGateway(BaseGateway):
                 params={"expand[]": ["number", "cvc"]},
             )
             resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            msg = e.response.json().get("error", {}).get("message", str(e))
-            raise GatewayError(f"Stripe API error: {msg}") from e
         except httpx.HTTPError as e:
-            raise GatewayError(f"Stripe API unreachable: {e}") from e
+            raise _map_stripe_error(e) from e
         return resp.json()
 
     def _update_spending_limit(self, card_id: str, amount_cents: int) -> None:
@@ -178,11 +216,8 @@ class StripeCardGateway(BaseGateway):
                 },
             )
             resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            msg = e.response.json().get("error", {}).get("message", str(e))
-            raise GatewayError(f"Stripe API error: {msg}") from e
         except httpx.HTTPError as e:
-            raise GatewayError(f"Stripe API unreachable: {e}") from e
+            raise _map_stripe_error(e) from e
 
     def execute(self, amount_cents: int, vendor: str, memo: str) -> CardResult:
         """Create a Stripe Issuing virtual card with the given spend limit.
@@ -247,8 +282,7 @@ class StripeCardGateway(BaseGateway):
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return False
-            msg = e.response.json().get("error", {}).get("message", str(e))
-            raise GatewayError(f"Stripe API error: {msg}") from e
+            raise _map_stripe_error(e) from e
         except httpx.HTTPError as e:
-            raise GatewayError(f"Stripe API unreachable: {e}") from e
+            raise _map_stripe_error(e) from e
         return True

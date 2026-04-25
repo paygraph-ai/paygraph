@@ -14,6 +14,38 @@ class GatewayError(PayGraphError):
     """Gateway API call failed."""
 
 
+class CardDeclinedError(GatewayError):
+    """Stripe card was declined."""
+
+    def __init__(self, message: str, stripe_code: str | None = None) -> None:
+        self.stripe_code = stripe_code
+        super().__init__(message)
+
+
+class InsufficientFundsError(GatewayError):
+    """Stripe card has insufficient funds."""
+
+    def __init__(self, message: str, stripe_code: str | None = None) -> None:
+        self.stripe_code = stripe_code
+        super().__init__(message)
+
+
+class RateLimitedError(GatewayError):
+    """Stripe API rate limit was exceeded."""
+
+    def __init__(self, message: str, stripe_code: str | None = None) -> None:
+        self.stripe_code = stripe_code
+        super().__init__(message)
+
+
+class StripeUnreachableError(GatewayError):
+    """Stripe API could not be reached."""
+
+    def __init__(self, message: str, stripe_code: str | None = None) -> None:
+        self.stripe_code = stripe_code
+        super().__init__(message)
+
+
 class HumanApprovalRequired(PayGraphError):
     """Spend requires human approval via Slack before proceeding.
 
