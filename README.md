@@ -229,6 +229,38 @@ agent = Agent(
 )
 ```
 
+## MCP Server
+
+```bash
+pip install paygraph[mcp]
+```
+
+Run the MCP server over stdio:
+
+```bash
+PAYGRAPH_GATEWAY=mock \
+PAYGRAPH_DAILY_BUDGET=100 \
+PAYGRAPH_MAX_TRANSACTION=25 \
+paygraph-mcp
+```
+
+Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "paygraph": {
+      "command": "paygraph-mcp",
+      "env": {
+        "PAYGRAPH_GATEWAY": "mock",
+        "PAYGRAPH_DAILY_BUDGET": "100",
+        "PAYGRAPH_MAX_TRANSACTION": "25"
+      }
+    }
+  }
+}
+```
+
 ## Policy Configuration
 
 `SpendPolicy` accepts the following parameters:
