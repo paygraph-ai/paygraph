@@ -1,9 +1,12 @@
 import secrets
+import time
 
 import httpx
 
 from paygraph.exceptions import GatewayError, HumanApprovalRequired, SpendDeniedError
 from paygraph.gateways.base import BaseGateway, CardResult, SpendResult
+
+DEFAULT_PENDING_TTL_SECONDS = 24 * 60 * 60
 
 
 class SlackApprovalGateway(BaseGateway):
@@ -39,15 +42,25 @@ class SlackApprovalGateway(BaseGateway):
             )
     """
 
-    def __init__(self, webhook_url: str, inner_gateway: BaseGateway) -> None:
+    def __init__(
+        self,
+        webhook_url: str,
+        inner_gateway: BaseGateway,
+        pending_ttl_seconds: int | None = DEFAULT_PENDING_TTL_SECONDS,
+    ) -> None:
         """Initialise the Slack approval gateway.
 
         Args:
             webhook_url: Slack incoming webhook URL to post approval requests to.
             inner_gateway: Gateway used to execute the spend once approved.
+            pending_ttl_seconds: How long (in seconds) a pending approval request
+                stays valid before auto-denying. Defaults to 24h. Pass ``None``
+                to disable expiry (entries live forever — discouraged for
+                production use).
         """
         self.webhook_url = webhook_url
         self.inner_gateway = inner_gateway
+        self.pending_ttl_seconds = pending_ttl_seconds
         self._pending: dict[str, dict] = {}
 
     def request_approval(
@@ -97,8 +110,27 @@ class SlackApprovalGateway(BaseGateway):
             "vendor": vendor,
             "memo": memo,
             "justification": justification,
+            "created_at": time.monotonic(),
         }
         raise HumanApprovalRequired(request_id, amount_dollars, vendor)
+
+    def _is_expired(self, pending: dict) -> bool:
+        if self.pending_ttl_seconds is None:
+            return False
+        return time.monotonic() - pending["created_at"] > self.pending_ttl_seconds
+
+    def purge_expired(self) -> int:
+        """Drop all pending requests older than ``pending_ttl_seconds``.
+
+        Returns:
+            The number of requests purged.
+        """
+        if self.pending_ttl_seconds is None:
+            return 0
+        expired = [rid for rid, p in self._pending.items() if self._is_expired(p)]
+        for rid in expired:
+            del self._pending[rid]
+        return len(expired)
 
     def execute(
         self, amount_cents: int, vendor: str, memo: str, **kwargs
@@ -127,10 +159,16 @@ class SlackApprovalGateway(BaseGateway):
             A ``CardResult`` from the inner gateway if approved.
 
         Raises:
-            SpendDeniedError: If ``approved`` is ``False``.
+            SpendDeniedError: If ``approved`` is ``False`` or if the request
+                has expired past ``pending_ttl_seconds``.
             KeyError: If ``request_id`` is unknown or already completed.
         """
         pending = self._pending.pop(request_id)
+        if self._is_expired(pending):
+            raise SpendDeniedError(
+                f"Approval timed out for spend of "
+                f"${pending['amount_cents'] / 100:.2f} for {pending['vendor']}"
+            )
         if not approved:
             raise SpendDeniedError(
                 f"Human denied spend of ${pending['amount_cents'] / 100:.2f} "
@@ -144,7 +182,9 @@ class SlackApprovalGateway(BaseGateway):
         """Return a pending request's metadata without removing it.
 
         Used by ``AgentWallet.complete_spend()`` to retrieve vendor/justification
-        for audit logging before calling ``complete_spend()``.
+        for audit logging before calling ``complete_spend()``. Expired entries
+        are still returned so the caller can write a denial audit record;
+        ``complete_spend()`` will then raise ``SpendDeniedError``.
 
         Raises:
             KeyError: If ``request_id`` is unknown.
