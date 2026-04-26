@@ -215,6 +215,9 @@ class TestCheckOrdering:
             "vendor_allowlist",
             "vendor_blocklist",
             "mcc_filter",
+            "hourly_budget",
+            "weekly_budget",
+            "monthly_budget",
             "daily_budget",
             "justification",
         ]
