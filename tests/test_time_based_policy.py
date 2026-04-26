@@ -9,7 +9,10 @@ from datetime import datetime, timedelta
 from unittest.mock import patch, Mock
 
 from paygraph.policy import PolicyEngine, SpendPolicy
-from paygraph.time_periods import PeriodTracker, TimePeriod, PeriodCalculator
+from paygraph.time_periods import (
+    PeriodTracker, TimePeriod,
+    get_hourly_period, get_daily_period, get_weekly_period, get_monthly_period,
+)
 
 
 class TestPeriodCalculator:
@@ -17,59 +20,49 @@ class TestPeriodCalculator:
     
     def test_hourly_period_boundaries(self):
         """Test hourly period calculation."""
-        calc = PeriodCalculator()
-        
-        # Test middle of hour
         dt = datetime(2024, 1, 15, 14, 30, 45)
-        start, end = calc.get_hourly_period(dt)
+        start, end = get_hourly_period(dt)
         
         assert start == datetime(2024, 1, 15, 14, 0, 0)
         assert end == datetime(2024, 1, 15, 15, 0, 0)
     
     def test_daily_period_boundaries(self):
         """Test daily period calculation."""
-        calc = PeriodCalculator()
-        
-        # Test middle of day
         dt = datetime(2024, 1, 15, 14, 30, 45)
-        start, end = calc.get_daily_period(dt)
+        start, end = get_daily_period(dt)
         
         assert start == datetime(2024, 1, 15, 0, 0, 0)
         assert end == datetime(2024, 1, 16, 0, 0, 0)
     
     def test_weekly_period_boundaries(self):
         """Test weekly period calculation (Monday start)."""
-        calc = PeriodCalculator()
-        
         # Test Wednesday (2024-01-17 is a Wednesday)
         dt = datetime(2024, 1, 17, 14, 30, 45)
-        start, end = calc.get_weekly_period(dt)
-        
+        start, end = get_weekly_period(dt)
+
         # Should start on Monday (2024-01-15)
         assert start == datetime(2024, 1, 15, 0, 0, 0)
         assert end == datetime(2024, 1, 22, 0, 0, 0)
-        
+
         # Test Monday itself
         dt = datetime(2024, 1, 15, 10, 0, 0)
-        start, end = calc.get_weekly_period(dt)
+        start, end = get_weekly_period(dt)
         
         assert start == datetime(2024, 1, 15, 0, 0, 0)
         assert end == datetime(2024, 1, 22, 0, 0, 0)
     
     def test_monthly_period_boundaries(self):
         """Test monthly period calculation."""
-        calc = PeriodCalculator()
-        
         # Test middle of January
         dt = datetime(2024, 1, 15, 14, 30, 45)
-        start, end = calc.get_monthly_period(dt)
-        
+        start, end = get_monthly_period(dt)
+
         assert start == datetime(2024, 1, 1, 0, 0, 0)
         assert end == datetime(2024, 2, 1, 0, 0, 0)
-        
+
         # Test December (year rollover)
         dt = datetime(2024, 12, 15, 14, 30, 45)
-        start, end = calc.get_monthly_period(dt)
+        start, end = get_monthly_period(dt)
         
         assert start == datetime(2024, 12, 1, 0, 0, 0)
         assert end == datetime(2025, 1, 1, 0, 0, 0)
@@ -666,23 +659,19 @@ class TestPolicyEngineIntegration:
         assert weekly_summary["spent_amount"] == 30.0
         assert weekly_summary["remaining_budget"] == 270.0
     
-    @patch('random.randint')
-    def test_periodic_cleanup_called(self, mock_random):
+    def test_periodic_cleanup_called(self):
         """Test that periodic cleanup is called."""
-        # Mock random to return 1 (trigger cleanup)
-        mock_random.return_value = 1
-        
         policy = SpendPolicy(hourly_budget=100.0)
         engine = PolicyEngine(policy)
-        
-        # Mock the cleanup method to verify it's called
         engine._period_tracker.cleanup_old_periods = Mock()
-        
+
+        # Set counter to 99 so next evaluate() triggers cleanup at 100
+        engine._eval_count = 99
+
         with patch('paygraph.time_periods.datetime') as mock_dt, \
              patch('paygraph.policy.datetime') as mock_policy_dt:
             mock_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
             mock_policy_dt.now.return_value = datetime(2024, 1, 15, 14, 30, 0)
-            result = engine.evaluate(30.0, "vendor", "reason")
-        
-        # Cleanup should have been called
+            engine.evaluate(30.0, "vendor", "reason")
+
         engine._period_tracker.cleanup_old_periods.assert_called_once()
