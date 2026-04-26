@@ -372,7 +372,7 @@ class AgentWallet:
 
         try:
             card = gw.complete_spend(request_id, approved)
-        except SpendDeniedError:
+        except SpendDeniedError as e:
             self._audit.log(
                 AuditRecord.now(
                     agent_id=self.agent_id,
@@ -380,7 +380,7 @@ class AgentWallet:
                     vendor=vendor,
                     justification=justification,
                     policy_result="denied",
-                    denial_reason=f"Human denied spend of ${amount:.2f} for {vendor}",
+                    denial_reason=str(e),
                 )
             )
             raise

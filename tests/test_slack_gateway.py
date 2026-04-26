@@ -284,3 +284,115 @@ class TestWalletSlackFlow:
         assert approved_record["vendor"] == "Anthropic"
         assert approved_record["justification"] == "need tokens for task"
         assert approved_record["amount"] == 50.0
+
+
+# ---------------------------------------------------------------------------
+# TTL / expiry tests
+# ---------------------------------------------------------------------------
+
+
+class TestPendingTTL:
+    def test_default_ttl_is_24_hours(self):
+        gateway = SlackApprovalGateway(
+            webhook_url="https://hooks.slack.com/test",
+            inner_gateway=MockGateway(auto_approve=True),
+        )
+        assert gateway.pending_ttl_seconds == 24 * 60 * 60
+
+    def test_expired_request_raises_spend_denied(self):
+        """complete_spend on an expired request raises SpendDeniedError with timeout reason."""
+        gateway = SlackApprovalGateway(
+            webhook_url="https://hooks.slack.com/test",
+            inner_gateway=MockGateway(auto_approve=True),
+            pending_ttl_seconds=60,
+        )
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as exc_info:
+                gateway.request_approval(5000, "Anthropic", "need tokens")
+
+        # Backdate the entry so it appears stale
+        gateway._pending[exc_info.value.request_id]["created_at"] -= 120
+
+        with pytest.raises(SpendDeniedError, match="timed out"):
+            gateway.complete_spend(exc_info.value.request_id, approved=True)
+
+    def test_ttl_none_disables_expiry(self):
+        gateway = SlackApprovalGateway(
+            webhook_url="https://hooks.slack.com/test",
+            inner_gateway=MockGateway(auto_approve=True),
+            pending_ttl_seconds=None,
+        )
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as exc_info:
+                gateway.request_approval(5000, "Anthropic", "need tokens")
+
+        # Even with a very old created_at, no expiry triggers
+        gateway._pending[exc_info.value.request_id]["created_at"] -= 10**9
+        card = gateway.complete_spend(exc_info.value.request_id, approved=True)
+        assert card.pan == "4111111111111111"
+
+    def test_purge_expired_drops_stale_entries(self):
+        gateway = SlackApprovalGateway(
+            webhook_url="https://hooks.slack.com/test",
+            inner_gateway=MockGateway(auto_approve=True),
+            pending_ttl_seconds=60,
+        )
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as fresh:
+                gateway.request_approval(1000, "FreshVendor", "still valid")
+            with pytest.raises(HumanApprovalRequired) as stale:
+                gateway.request_approval(2000, "StaleVendor", "old entry")
+
+        gateway._pending[stale.value.request_id]["created_at"] -= 120
+
+        purged = gateway.purge_expired()
+        assert purged == 1
+        assert fresh.value.request_id in gateway._pending
+        assert stale.value.request_id not in gateway._pending
+
+    def test_purge_expired_noop_when_ttl_none(self):
+        gateway = SlackApprovalGateway(
+            webhook_url="https://hooks.slack.com/test",
+            inner_gateway=MockGateway(auto_approve=True),
+            pending_ttl_seconds=None,
+        )
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired):
+                gateway.request_approval(1000, "Anthropic", "memo")
+        assert gateway.purge_expired() == 0
+        assert len(gateway._pending) == 1
+
+    def test_wallet_complete_spend_audits_timeout_with_real_metadata(self):
+        """When wallet.complete_spend hits an expired request, audit captures the timeout reason."""
+        gateway = SlackApprovalGateway(
+            webhook_url="https://hooks.slack.com/test",
+            inner_gateway=MockGateway(auto_approve=True),
+            pending_ttl_seconds=60,
+        )
+        f = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
+        f.close()
+        wallet = AgentWallet(
+            gateways=gateway,
+            policy=SpendPolicy(require_human_approval_above=20.0),
+            log_path=f.name,
+            verbose=False,
+        )
+
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as exc_info:
+                wallet.request_spend(50.0, "Anthropic", "need tokens")
+
+        request_id = exc_info.value.request_id
+        gateway._pending[request_id]["created_at"] -= 120
+
+        with pytest.raises(SpendDeniedError, match="timed out"):
+            wallet.complete_spend(
+                request_id, approved=True, gateway=exc_info.value.gateway_name
+            )
+
+        records = _read_audit(f.name)
+        denied = next(r for r in records if r["policy_result"] == "denied")
+        assert denied["vendor"] == "Anthropic"
+        assert denied["justification"] == "need tokens"
+        assert denied["amount"] == 50.0
+        assert "timed out" in denied["denial_reason"]
