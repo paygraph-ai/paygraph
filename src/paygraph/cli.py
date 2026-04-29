@@ -312,6 +312,25 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
     os.unlink(audit_path)
 
 
+def run_mcp_server(transport: str, port: int) -> None:
+    """Run the MCP server with the specified transport."""
+    try:
+        from paygraph.mcp_server import create_mcp_server
+    except ImportError:
+        print(
+            "ERROR: MCP server requires MCP extras.\n"
+            "Install with: pip install paygraph[mcp]"
+        )
+        raise SystemExit(1)
+
+    mcp = create_mcp_server()
+
+    if transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(transport="streamable-http", port=port)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="paygraph",
@@ -346,6 +365,26 @@ def main() -> None:
         ),
     )
 
+    mcp_parser = subparsers.add_parser(
+        "mcp", help="Run PayGraph as an MCP server"
+    )
+    mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command")
+    serve_parser = mcp_subparsers.add_parser(
+        "serve", help="Start the MCP server"
+    )
+    serve_parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default="stdio",
+        help="Transport protocol (default: stdio)",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port for HTTP transport (default: 8080)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "demo":
@@ -356,6 +395,11 @@ def main() -> None:
             run_live_demo(args.model, stripe=args.stripe, stripe_mpp=args.stripe_mpp)
         else:
             run_demo()
+    elif args.command == "mcp":
+        if args.mcp_command == "serve":
+            run_mcp_server(args.transport, args.port)
+        else:
+            mcp_parser.print_help()
     else:
         parser.print_help()
 

@@ -42,3 +42,10 @@ __all__ = [
     "GatewayError",
     "HumanApprovalRequired",
 ]
+
+try:
+    from paygraph.mcp_server import create_mcp_server  # noqa: F401
+
+    __all__.append("create_mcp_server")
+except ImportError:
+    pass
