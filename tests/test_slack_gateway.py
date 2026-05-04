@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from paygraph.exceptions import GatewayError, HumanApprovalRequired, SpendDeniedError
+from paygraph.exceptions import (
+    GatewayError,
+    HumanApprovalRequired,
+    SpendDeniedError,
+    UnknownApprovalError,
+)
 from paygraph.gateways.base import VirtualCard
 from paygraph.gateways.mock import MockGateway
 from paygraph.gateways.slack import SlackApprovalGateway
@@ -284,3 +289,51 @@ class TestWalletSlackFlow:
         assert approved_record["vendor"] == "Anthropic"
         assert approved_record["justification"] == "need tokens for task"
         assert approved_record["amount"] == 50.0
+
+
+class TestCompleteSpendUnknownRequestId:
+    """complete_spend must raise UnknownApprovalError, not bare KeyError,
+    when the request_id is unknown — covers stale ids after a process restart
+    and double-completion of the same id."""
+
+    def test_unknown_request_id_raises_unknown_approval_error(self):
+        """A request_id never issued by this wallet raises UnknownApprovalError."""
+        wallet, _ = _make_slack_wallet()
+        with pytest.raises(UnknownApprovalError, match="No pending approval"):
+            wallet.complete_spend("nonexistent_id", approved=True)
+
+    def test_stale_request_id_after_process_restart_raises_unknown_approval_error(self):
+        """Simulate a restart: the request was issued by an earlier wallet whose
+        in-memory _pending dict is gone. A fresh wallet sees the id as unknown."""
+        # First wallet issues an approval, then the request_id leaks out.
+        wallet_before, _ = _make_slack_wallet()
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as exc_info:
+                wallet_before.request_spend(50.0, "Anthropic", "need tokens")
+        stale_id = exc_info.value.request_id
+
+        # Second wallet has no record of stale_id (fresh _pending dict).
+        wallet_after, _ = _make_slack_wallet()
+        with pytest.raises(UnknownApprovalError, match=stale_id):
+            wallet_after.complete_spend(stale_id, approved=True)
+
+    def test_double_completion_raises_unknown_approval_error(self):
+        """The second complete_spend on the same id must raise UnknownApprovalError."""
+        wallet, _ = _make_slack_wallet()
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as exc_info:
+                wallet.request_spend(50.0, "Anthropic", "need tokens")
+
+        request_id = exc_info.value.request_id
+        wallet.complete_spend(request_id, approved=True)
+        with pytest.raises(UnknownApprovalError, match=request_id):
+            wallet.complete_spend(request_id, approved=True)
+
+    def test_unknown_approval_error_is_paygraph_error(self):
+        """UnknownApprovalError subclasses PayGraphError so existing
+        ``except PayGraphError`` blocks continue to catch it."""
+        from paygraph.exceptions import PayGraphError
+
+        wallet, _ = _make_slack_wallet()
+        with pytest.raises(PayGraphError):
+            wallet.complete_spend("nonexistent_id", approved=True)

@@ -4,6 +4,7 @@ from paygraph.exceptions import (
     PayGraphError,
     PolicyViolationError,
     SpendDeniedError,
+    UnknownApprovalError,
 )
 from paygraph.gateways.base import (
     BaseGateway,
@@ -41,4 +42,5 @@ __all__ = [
     "PolicyViolationError",
     "GatewayError",
     "HumanApprovalRequired",
+    "UnknownApprovalError",
 ]
