@@ -7,6 +7,65 @@ from paygraph.gateways.mock import MockGateway
 from paygraph.policy import SpendPolicy
 from paygraph.wallet import AgentWallet
 
+_BILLING_ENV_VARS = {
+    "line1": "STRIPE_BILLING_LINE1",
+    "line2": "STRIPE_BILLING_LINE2",
+    "city": "STRIPE_BILLING_CITY",
+    "state": "STRIPE_BILLING_STATE",
+    "postal_code": "STRIPE_BILLING_POSTAL_CODE",
+    "country": "STRIPE_BILLING_COUNTRY",
+}
+_REQUIRED_BILLING_FIELDS = ("line1", "city", "postal_code", "country")
+
+
+def _resolve_stripe_billing_address(
+    env: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    """Build a Stripe billing address dict from environment variables.
+
+    Returns ``None`` when no ``STRIPE_BILLING_*`` variable is set, letting
+    ``StripeCardGateway`` fall back to its US default. When any of the six
+    ``STRIPE_BILLING_*`` variables is set, the four required fields
+    (``line1``, ``city``, ``postal_code``, ``country``) must all be set;
+    ``line2`` and ``state`` are optional.
+
+    Args:
+        env: Environment mapping to read from. Defaults to ``os.environ``.
+            Exposed for tests so they can drive the helper without mutating
+            the real environment.
+
+    Returns:
+        A dict suitable for ``StripeCardGateway(billing_address=...)``, or
+        ``None`` if no billing variables are set.
+
+    Raises:
+        SystemExit: If the configuration is partial (one or more of the
+            required fields is missing) — surfaces a message listing the
+            missing variables before exiting.
+    """
+    env = env if env is not None else os.environ
+    values = {field: env.get(var) for field, var in _BILLING_ENV_VARS.items()}
+
+    if not any(values.values()):
+        return None
+
+    missing = [
+        _BILLING_ENV_VARS[field]
+        for field in _REQUIRED_BILLING_FIELDS
+        if not values[field]
+    ]
+    if missing:
+        print(
+            "ERROR: Stripe billing address is partially configured.\n"
+            "Set all four required variables together: "
+            f"{', '.join(_BILLING_ENV_VARS[f] for f in _REQUIRED_BILLING_FIELDS)}.\n"
+            f"Missing: {', '.join(missing)}.\n"
+            "STRIPE_BILLING_LINE2 and STRIPE_BILLING_STATE are optional."
+        )
+        raise SystemExit(1)
+
+    return {field: value for field, value in values.items() if value}
+
 
 def run_demo() -> None:
     print()
@@ -146,17 +205,7 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
             )
             raise SystemExit(1)
         currency = os.environ.get("STRIPE_CURRENCY", "usd")
-        billing_country = os.environ.get("STRIPE_BILLING_COUNTRY")
-        billing_address = (
-            {
-                "line1": "N/A",
-                "city": "N/A",
-                "postal_code": "00000",
-                "country": billing_country,
-            }
-            if billing_country
-            else None
-        )
+        billing_address = _resolve_stripe_billing_address()
         cardholder_id = os.environ.get("STRIPE_CARDHOLDER_ID")
         gateway = StripeCardGateway(
             api_key=stripe_key,
