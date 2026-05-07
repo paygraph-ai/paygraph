@@ -6,6 +6,7 @@ from paygraph.exceptions import (
     HumanApprovalRequired,
     PolicyViolationError,
     SpendDeniedError,
+    UnknownApprovalError,
 )
 from paygraph.gateways.base import BaseGateway, CardResult, SpendResult
 from paygraph.gateways.mock import MockGateway
@@ -359,13 +360,22 @@ class AgentWallet:
         Raises:
             GatewayError: If the gateway is not a ``SlackApprovalGateway``.
             SpendDeniedError: If ``approved`` is ``False``.
+            UnknownApprovalError: If ``request_id`` is not in the gateway's
+                pending store (already completed, expired, or from a
+                previous process).
         """
         gw = self._resolve_gateway(gateway)
         if not isinstance(gw, SlackApprovalGateway):
             raise GatewayError("complete_spend requires a SlackApprovalGateway.")
 
         # Peek at pending metadata before complete_spend() pops it
-        pending = gw.get_pending(request_id)
+        try:
+            pending = gw.get_pending(request_id)
+        except KeyError as e:
+            raise UnknownApprovalError(
+                f"No pending approval found for request_id '{request_id}' "
+                f"(already completed, expired, or from a previous process)."
+            ) from e
         amount = pending["amount_cents"] / 100
         vendor = pending["vendor"]
         justification = pending["justification"]

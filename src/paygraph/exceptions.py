@@ -14,6 +14,17 @@ class GatewayError(PayGraphError):
     """Gateway API call failed."""
 
 
+class UnknownApprovalError(PayGraphError):
+    """No pending approval matches the given ``request_id``.
+
+    Raised by :meth:`AgentWallet.complete_spend` when the ``request_id`` is
+    not in the gateway's pending store. Common causes: the entry was already
+    completed by a previous call, the process restarted between
+    ``request_spend`` and ``complete_spend`` (in-memory pending store lost),
+    or the id was never issued.
+    """
+
+
 class HumanApprovalRequired(PayGraphError):
     """Spend requires human approval via Slack before proceeding.
 
