@@ -594,6 +594,26 @@ class AgentWallet:
         return spend_result.response_body
 
     @cached_property
+    def langgraph_spend_tool(self):
+        """LangGraph-native spend tool that pauses via ``interrupt()``.
+
+        Parallel to ``spend_tool`` but hooks into LangGraph's checkpointer:
+        when a spend needs human approval the tool calls ``interrupt()``
+        instead of letting ``HumanApprovalRequired`` propagate, so the graph
+        pauses at a node boundary and can be resumed from a cold start via
+        ``Command(resume={"approved": bool})``.
+
+        Requires ``langchain-core`` and ``langgraph``:
+        install with ``pip install paygraph[langgraph]``.
+
+        See ``paygraph.integrations.langgraph.build_langgraph_spend_tool`` for
+        the full docstring including the re-run caveat.
+        """
+        from paygraph.integrations.langgraph import build_langgraph_spend_tool
+
+        return build_langgraph_spend_tool(self)
+
+    @cached_property
     def crewai_tool(self):
         """CrewAI-compatible tool for virtual card spends.
 
