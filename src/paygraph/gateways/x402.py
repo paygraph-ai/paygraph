@@ -2,8 +2,12 @@ import asyncio
 import base64
 import concurrent.futures
 import json
+from typing import TYPE_CHECKING
 
 from paygraph.gateways.base import BaseGateway, X402Result
+
+if TYPE_CHECKING:
+    from x402 import PaymentPolicy, PaymentRequirementsSelector
 
 # Deprecated alias — kept for one release cycle
 X402Receipt = X402Result
@@ -16,15 +20,44 @@ class X402Gateway(BaseGateway):
     private key must be provided. The x402 SDK is imported lazily — it
     only needs to be installed when this gateway is used.
 
+    When a server's ``402`` response advertises more than one acceptable
+    payment requirement (e.g. USDC on Base *and* on Ethereum, or several
+    price points), the gateway must pick which one to pay. By default the
+    underlying SDK simply pays the first requirement offered, with no
+    upper bound — fine for demos, risky for an autonomous agent. The
+    selection arguments below let you apply PayGraph-style governance to
+    that choice *before any funds move*:
+
     Args:
         evm_private_key: Hex-encoded EVM private key (e.g. ``"0x..."``).
         svm_private_key: Base58-encoded Solana private key.
+        prefer_network: If set, prefer payment requirements on this x402
+            network id (e.g. ``"eip155:8453"`` for Base) when the server
+            offers a choice. Requirements on other networks remain as
+            fallbacks rather than being dropped.
+        max_amount: If set, reject any offered payment requirement whose
+            amount exceeds this value, expressed in the asset's *atomic*
+            units (e.g. ``1_000_000`` == 1 USDC at 6 decimals). Acts as a
+            hard per-request ceiling on the on-chain amount the gateway
+            will agree to, independent of the dollar-denominated
+            ``SpendPolicy`` enforced by ``AgentWallet``.
+        payment_policies: Advanced escape hatch — any additional x402
+            ``PaymentPolicy`` callables to register on the client, applied
+            in order after ``prefer_network`` / ``max_amount``.
+        payment_requirements_selector: Advanced escape hatch — a custom
+            selector that chooses the final requirement from the filtered
+            list. Defaults to the SDK's "first requirement" selector.
     """
 
     def __init__(
         self,
         evm_private_key: str | None = None,
         svm_private_key: str | None = None,
+        *,
+        prefer_network: str | None = None,
+        max_amount: int | None = None,
+        payment_policies: "list[PaymentPolicy] | None" = None,
+        payment_requirements_selector: "PaymentRequirementsSelector | None" = None,
     ) -> None:
         if not evm_private_key and not svm_private_key:
             raise ValueError(
@@ -32,6 +65,8 @@ class X402Gateway(BaseGateway):
             )
 
         try:
+            from x402 import max_amount as max_amount_policy
+            from x402 import prefer_network as prefer_network_policy
             from x402 import x402Client
         except ImportError:
             raise ImportError(
@@ -39,7 +74,20 @@ class X402Gateway(BaseGateway):
                 "Install it with: pip install paygraph[x402]"
             )
 
-        self._client = x402Client()
+        self._client = x402Client(
+            payment_requirements_selector=payment_requirements_selector
+        )
+
+        # Requirement-selection policies are applied in registration order to
+        # the list of requirements the server offers, before one is chosen and
+        # paid. prefer_network reorders (keeps others as fallbacks); max_amount
+        # filters out anything above the ceiling.
+        if prefer_network is not None:
+            self._client.register_policy(prefer_network_policy(prefer_network))
+        if max_amount is not None:
+            self._client.register_policy(max_amount_policy(max_amount))
+        for policy in payment_policies or []:
+            self._client.register_policy(policy)
 
         if evm_private_key:
             from eth_account import Account

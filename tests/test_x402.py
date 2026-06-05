@@ -268,3 +268,115 @@ class TestX402GatewaySyncDispatch:
         result = asyncio.run(run())
         assert isinstance(result, X402Result)
         assert result.amount_cents == 50
+
+
+# ---------------------------------------------------------------------------
+# X402Gateway requirement-selection governance (prefer_network / max_amount)
+# ---------------------------------------------------------------------------
+
+# A throwaway, well-known test key (Hardhat account #0). Never funded; only
+# used to exercise offline gateway construction / signer registration.
+_TEST_EVM_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+
+
+class _Req:
+    """Minimal stand-in for an x402 PaymentRequirements row.
+
+    The built-in policies only read ``.network`` and ``.get_amount()``, so a
+    tiny shim keeps the test independent of the SDK's pydantic schema/version.
+    """
+
+    def __init__(self, network: str, amount: int) -> None:
+        self.network = network
+        self._amount = amount
+
+    def get_amount(self) -> int:
+        return self._amount
+
+
+def _apply_policies(client, reqs: list) -> list:
+    """Replay the client's registered policies over a requirements list."""
+    filtered = list(reqs)
+    for policy in client._policies:
+        filtered = policy(2, filtered)
+    return filtered
+
+
+class TestX402GatewaySelectionPolicies:
+    """prefer_network / max_amount must register real x402 policies that
+    filter and reorder the requirements offered by a server."""
+
+    def test_no_policies_by_default(self):
+        pytest.importorskip("x402")
+        gw = X402Gateway(evm_private_key=_TEST_EVM_KEY)
+        assert gw._client._policies == []
+
+    def test_prefer_network_reorders_keeps_fallbacks(self):
+        pytest.importorskip("x402")
+        gw = X402Gateway(evm_private_key=_TEST_EVM_KEY, prefer_network="eip155:8453")
+        assert len(gw._client._policies) == 1
+
+        reqs = [
+            _Req("eip155:1", 100),       # Ethereum
+            _Req("eip155:8453", 100),    # Base (preferred)
+            _Req("solana:mainnet", 100),
+        ]
+        out = _apply_policies(gw._client, reqs)
+        # Base moved to the front, others retained as fallbacks.
+        assert out[0].network == "eip155:8453"
+        assert {r.network for r in out} == {r.network for r in reqs}
+
+    def test_max_amount_filters_over_cap(self):
+        pytest.importorskip("x402")
+        gw = X402Gateway(evm_private_key=_TEST_EVM_KEY, max_amount=1_000_000)
+        assert len(gw._client._policies) == 1
+
+        reqs = [
+            _Req("eip155:8453", 500_000),     # 0.5 USDC — ok
+            _Req("eip155:8453", 1_000_000),   # 1.0 USDC — ok (boundary)
+            _Req("eip155:8453", 5_000_000),   # 5.0 USDC — over cap
+        ]
+        out = _apply_policies(gw._client, reqs)
+        amounts = sorted(r.get_amount() for r in out)
+        assert amounts == [500_000, 1_000_000]
+
+    def test_prefer_network_and_max_amount_combine(self):
+        pytest.importorskip("x402")
+        gw = X402Gateway(
+            evm_private_key=_TEST_EVM_KEY,
+            prefer_network="eip155:8453",
+            max_amount=1_000_000,
+        )
+        assert len(gw._client._policies) == 2
+
+        reqs = [
+            _Req("eip155:1", 200_000),        # cheap, wrong network
+            _Req("eip155:8453", 5_000_000),   # preferred network, over cap
+            _Req("eip155:8453", 300_000),     # preferred network, under cap
+        ]
+        out = _apply_policies(gw._client, reqs)
+        # Over-cap Base requirement dropped; the surviving Base one ranks first.
+        assert out[0].network == "eip155:8453"
+        assert out[0].get_amount() == 300_000
+        assert all(r.get_amount() <= 1_000_000 for r in out)
+
+    def test_custom_policies_and_selector_are_wired(self):
+        pytest.importorskip("x402")
+
+        def drop_solana(version, reqs):
+            return [r for r in reqs if not r.network.startswith("solana")]
+
+        def pick_last(version, reqs):
+            return reqs[-1]
+
+        gw = X402Gateway(
+            evm_private_key=_TEST_EVM_KEY,
+            payment_policies=[drop_solana],
+            payment_requirements_selector=pick_last,
+        )
+        assert len(gw._client._policies) == 1
+        assert gw._client._selector is pick_last
+
+        reqs = [_Req("eip155:8453", 100), _Req("solana:mainnet", 100)]
+        out = _apply_policies(gw._client, reqs)
+        assert [r.network for r in out] == ["eip155:8453"]
