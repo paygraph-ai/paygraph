@@ -212,3 +212,26 @@ class TestLangGraphSpendTool:
             final = graph.invoke(Command(resume=True), config=config)
 
         assert "Card approved" in final["result"]
+
+    def test_resume_with_string_false_is_denied(self):
+        """String 'false' must not be treated as approval (webhook safety)."""
+        wallet, audit_path = _make_wallet_with_slack()
+        graph = _build_graph(wallet)
+        config = {"configurable": {"thread_id": "t-str-false"}}
+
+        with patch("httpx.post"):
+            graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            final = graph.invoke(
+                Command(resume={"approved": "false"}), config=config
+            )
+
+        assert "Spend denied" in final["result"]
+        records = _read_audit(audit_path)
+        assert any(r["policy_result"] == "denied" for r in records)
