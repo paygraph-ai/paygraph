@@ -213,8 +213,19 @@ class AgentWallet:
             )
             raise GatewayError(str(e)) from e
 
-        # Gateway succeeded — now it is safe to commit the spend to the budget
-        self.policy_engine.commit_spend(amount)
+        # Gateway succeeded — now it is safe to commit the spend to the budget.
+        # x402 gateways may report the settled amount from the facilitator's
+        # SettleResponse; when present, use it so budget & audit reflect what
+        # was actually paid rather than what was requested.
+        settled_cents = getattr(spend_result, "settled_amount_cents", None)
+        if settled_cents is not None:
+            commit_amount = settled_cents / 100
+            settled_amount_for_audit: float | None = commit_amount
+        else:
+            commit_amount = amount
+            settled_amount_for_audit = None
+
+        self.policy_engine.commit_spend(commit_amount)
 
         self._audit.log(
             AuditRecord.now(
@@ -227,6 +238,7 @@ class AgentWallet:
                 gateway_ref=spend_result.gateway_ref,
                 gateway_type=spend_result.gateway_type,
                 policy_snapshot=self._policy_snapshot(),
+                settled_amount=settled_amount_for_audit,
             )
         )
 
@@ -303,7 +315,19 @@ class AgentWallet:
             )
             raise GatewayError(str(e)) from e
 
-        self.policy_engine.commit_spend(amount)
+        # x402 gateways may report the settled amount from the facilitator's
+        # SettleResponse. When set, commit and audit against the *settled*
+        # amount rather than the caller's requested amount so the budget
+        # reflects reality when the remote endpoint charges differently.
+        settled_cents = getattr(spend_result, "settled_amount_cents", None)
+        if settled_cents is not None:
+            commit_amount = settled_cents / 100
+            settled_amount_for_audit: float | None = commit_amount
+        else:
+            commit_amount = amount
+            settled_amount_for_audit = None
+
+        self.policy_engine.commit_spend(commit_amount)
 
         self._audit.log(
             AuditRecord.now(
@@ -316,6 +340,7 @@ class AgentWallet:
                 gateway_ref=spend_result.gateway_ref,
                 gateway_type=spend_result.gateway_type,
                 policy_snapshot=self._policy_snapshot(),
+                settled_amount=settled_amount_for_audit,
             )
         )
 

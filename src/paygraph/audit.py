@@ -12,8 +12,8 @@ _RED = "\033[91m"
 _YELLOW = "\033[93m"
 _CYAN = "\033[96m"
 _RESET = "\033[0m"
-_CHECK = "\u2713"
-_CROSS = "\u2717"
+_CHECK = "✓"
+_CROSS = "✗"
 
 _CHECK_LABELS = {
     "amount_cap": "Amount cap",
@@ -40,6 +40,15 @@ class AuditRecord:
         checks_passed: Names of policy checks that passed.
         gateway_ref: Gateway reference ID (for approved requests).
         gateway_type: Gateway type string (e.g. ``"mock"``, ``"stripe_test"``).
+        policy_snapshot: Full ``SpendPolicy`` (as a dict) that was active
+            when this record was written. Enables deterministic replay of
+            historical records against a candidate policy. May be ``None``
+            for records written before this field was introduced.
+        settled_amount: The actual settled amount from the gateway when it
+            differs from the requested ``amount``. Populated by x402
+            gateways from the facilitator's SettleResponse. ``None`` when
+            the gateway did not report a settled amount (in which case
+            ``amount`` is authoritative).
     """
 
     timestamp: str
@@ -53,6 +62,7 @@ class AuditRecord:
     gateway_ref: str | None
     gateway_type: str | None
     policy_snapshot: dict | None = None
+    settled_amount: float | None = None
 
     @classmethod
     def now(
@@ -67,6 +77,7 @@ class AuditRecord:
         gateway_ref: str | None = None,
         gateway_type: str | None = None,
         policy_snapshot: dict | None = None,
+        settled_amount: float | None = None,
     ) -> "AuditRecord":
         """Create an AuditRecord with the current UTC timestamp.
 
@@ -84,6 +95,8 @@ class AuditRecord:
                 when this record was written. Enables deterministic replay of
                 historical records against a candidate policy. May be ``None``
                 for records written before this field was introduced.
+            settled_amount: Gateway-reported settled amount when different
+                from the requested amount (x402 gateways only).
 
         Returns:
             A new ``AuditRecord`` with ``timestamp`` set to now (UTC).
@@ -100,6 +113,7 @@ class AuditRecord:
             gateway_ref=gateway_ref,
             gateway_type=gateway_type,
             policy_snapshot=policy_snapshot,
+            settled_amount=settled_amount,
         )
 
 

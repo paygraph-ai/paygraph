@@ -268,3 +268,152 @@ class TestX402GatewaySyncDispatch:
         result = asyncio.run(run())
         assert isinstance(result, X402Result)
         assert result.amount_cents == 50
+
+
+# ---------------------------------------------------------------------------
+# Settled-amount capture (issue #35)
+# ---------------------------------------------------------------------------
+
+
+class _SettlingX402Gateway(X402Gateway):
+    """X402Gateway that returns a receipt with configurable settled amount."""
+
+    def __init__(self, settled_atomic: str | None) -> None:
+        self._payer = "0xFakePayer"
+        self._settled_atomic = settled_atomic
+
+    async def execute_async(
+        self,
+        amount_cents: int,
+        vendor: str,
+        memo: str,
+        **kwargs,
+    ) -> X402Result:
+        settled_cents = (
+            int(self._settled_atomic) // 10_000
+            if self._settled_atomic is not None
+            else None
+        )
+        return X402Result(
+            url=kwargs.get("url", "https://api.example.com"),
+            amount_cents=amount_cents,
+            network="eip155:8453",
+            transaction_hash="0xfakehash",
+            payer=self._payer,
+            gateway_ref="0xfakehash",
+            gateway_type="x402",
+            settled_amount_atomic=self._settled_atomic,
+            settled_amount_cents=settled_cents,
+        )
+
+
+class TestSettledAmountCapture:
+    def test_settled_amount_commits_against_settled_not_requested(self):
+        """Wallet commits the settled amount when the gateway reports one."""
+        # Caller requests $1.00 = 100 cents. Facilitator settles $1.50 (150 cents
+        # = 1_500_000 atomic USDC units). Budget must reflect $1.50.
+        gw = _SettlingX402Gateway(settled_atomic="1500000")
+        wallet, path = _make_wallet(
+            x402_gateway=gw,
+            policy=SpendPolicy(daily_budget=2.0, max_transaction=5.0),
+        )
+        wallet.request_x402("https://api.example.com", 1.0, "PaidAPI", "data")
+
+        # Second call for $0.60 must fail — daily budget already used $1.50.
+        with pytest.raises(PolicyViolationError, match="Daily budget"):
+            wallet.request_x402("https://api.example.com", 0.60, "PaidAPI", "data")
+
+        records = _read_audit(path)
+        approved = [r for r in records if r["policy_result"] == "approved"]
+        assert len(approved) == 1
+        assert approved[0]["amount"] == 1.0
+        assert approved[0]["settled_amount"] == 1.50
+
+    def test_no_settled_amount_falls_back_to_requested(self):
+        """Older facilitators that don't return an amount keep the old behavior."""
+        gw = _SettlingX402Gateway(settled_atomic=None)
+        wallet, path = _make_wallet(
+            x402_gateway=gw,
+            policy=SpendPolicy(daily_budget=2.0, max_transaction=5.0),
+        )
+        wallet.request_x402("https://api.example.com", 1.0, "PaidAPI", "data")
+
+        records = _read_audit(path)
+        approved = [r for r in records if r["policy_result"] == "approved"]
+        assert len(approved) == 1
+        assert approved[0]["amount"] == 1.0
+        assert approved[0]["settled_amount"] is None
+
+    def test_settled_amount_below_requested_still_commits_settled(self):
+        """If facilitator settled *less* than requested, commit the smaller amount."""
+        # Requested $1.00, settled $0.75 (750_000 atomic USDC).
+        gw = _SettlingX402Gateway(settled_atomic="750000")
+        wallet, path = _make_wallet(
+            x402_gateway=gw,
+            policy=SpendPolicy(daily_budget=1.0, max_transaction=5.0),
+        )
+        wallet.request_x402("https://api.example.com", 1.0, "PaidAPI", "data")
+
+        # Daily budget was $1.00, we settled $0.75, so $0.25 remains.
+        # A follow-up $0.20 must succeed.
+        wallet.request_x402("https://api.example.com", 0.20, "PaidAPI", "more")
+
+        records = _read_audit(path)
+        approved = [r for r in records if r["policy_result"] == "approved"]
+        assert len(approved) == 2
+        assert approved[0]["settled_amount"] == 0.75
+
+
+class TestX402GatewayHeaderParsing:
+    """Direct test of X402Gateway.execute_async parsing the payment-response header."""
+
+    def test_parses_settled_amount_from_header(self):
+        # X402Gateway.execute_async imports x402.http.clients at call time,
+        # so this test needs the optional [x402] extra installed. Skip when
+        # it's not available (default CI matrix).
+        pytest.importorskip("x402")
+
+        import base64
+        import json as _json
+        from unittest.mock import AsyncMock, MagicMock
+
+        gw = X402Gateway.__new__(X402Gateway)
+        gw._client = None
+        gw._payer = "0xPayer"
+
+        settle = {
+            "success": True,
+            "transaction": "0xhash",
+            "network": "eip155:8453",
+            "amount": "2500000",  # 2_500_000 atomic USDC = $2.50 = 250 cents
+        }
+        header = base64.b64encode(_json.dumps(settle).encode()).decode()
+
+        fake_response = MagicMock()
+        fake_response.status_code = 200
+        fake_response.headers = {
+            "payment-response": header,
+            "content-type": "application/json",
+        }
+        fake_response.text = "{}"
+        fake_response.aread = AsyncMock(return_value=None)
+
+        fake_client_ctx = MagicMock()
+        fake_client_ctx.__aenter__ = AsyncMock(return_value=fake_client_ctx)
+        fake_client_ctx.__aexit__ = AsyncMock(return_value=False)
+        fake_client_ctx.request = AsyncMock(return_value=fake_response)
+
+        import x402.http.clients as _clients
+
+        original = _clients.x402HttpxClient
+        _clients.x402HttpxClient = lambda *a, **kw: fake_client_ctx
+        try:
+            result = asyncio.run(
+                gw.execute_async(100, "vendor", "memo", url="https://api.example.com")
+            )
+        finally:
+            _clients.x402HttpxClient = original
+
+        assert result.settled_amount_atomic == "2500000"
+        assert result.settled_amount_cents == 250
+        assert result.transaction_hash == "0xhash"
