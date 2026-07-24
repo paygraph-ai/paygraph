@@ -619,6 +619,23 @@ class AgentWallet:
         return spend_result.response_body
 
     @cached_property
+    def langgraph_spend_graph(self):
+        """Two-node LangGraph for Slack approval (recommended over ``langgraph_spend_tool``).
+
+        Compiles a ``request`` → ``complete`` graph with ``interrupt_before``
+        on ``complete``. ``request_spend`` runs once; resume calls
+        ``complete_spend`` without re-checking policy or posting a second
+        Slack message.
+
+        Requires ``langgraph``. Install with ``pip install paygraph[langgraph]``.
+
+        See ``paygraph.integrations.langgraph.build_langgraph_spend_graph``.
+        """
+        from paygraph.integrations.langgraph import build_langgraph_spend_graph
+
+        return build_langgraph_spend_graph(self)
+
+    @cached_property
     def langgraph_spend_tool(self):
         """LangGraph-native spend tool that pauses via ``interrupt()``.
 
@@ -627,6 +644,9 @@ class AgentWallet:
         instead of letting ``HumanApprovalRequired`` propagate, so the graph
         pauses at a node boundary and can be resumed from a cold start via
         ``Command(resume={"approved": bool})``.
+
+        For production Slack flows prefer ``langgraph_spend_graph``, which
+        avoids re-running ``request_spend`` on resume.
 
         Requires ``langchain-core`` and ``langgraph``:
         install with ``pip install paygraph[langgraph]``.
