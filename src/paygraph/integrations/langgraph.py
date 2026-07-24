@@ -35,6 +35,7 @@ from paygraph.exceptions import (
     HumanApprovalRequired,
     PolicyViolationError,
     SpendDeniedError,
+    UnknownApprovalError,
 )
 
 if TYPE_CHECKING:
@@ -107,13 +108,14 @@ def build_langgraph_spend_nodes(wallet):
         ) from e
 
     def request_node(state: PaygraphSpendState) -> dict:
-        if state.get("result"):
+        # Paused mid-flow — complete node owns the next step.
+        if state.get("needs_approval") and not state.get("result"):
             return {}
         try:
             result = wallet.request_spend(
                 state["amount"], state["vendor"], state["justification"]
             )
-            return {"result": result}
+            return {"result": result, "needs_approval": False}
         except HumanApprovalRequired as e:
             return {
                 "request_id": e.request_id,
@@ -124,10 +126,10 @@ def build_langgraph_spend_nodes(wallet):
                 "needs_approval": True,
             }
         except (PolicyViolationError, SpendDeniedError, GatewayError) as err:
-            return {"result": f"Spend denied: {err}"}
+            return {"result": f"Spend denied: {err}", "needs_approval": False}
 
     def complete_node(state: PaygraphSpendState) -> dict:
-        if not state.get("needs_approval"):
+        if not state.get("needs_approval") or state.get("result"):
             return {}
         human_decision = interrupt(
             _approval_interrupt_payload(
@@ -145,9 +147,15 @@ def build_langgraph_spend_nodes(wallet):
                 approved=approved,
                 gateway=state["gateway_name"],
             )
-            return {"result": result}
+            return {"result": result, "needs_approval": False}
+        except UnknownApprovalError:
+            # SlackListener (or another path) already resolved this request_id.
+            return {
+                "result": "Spend already completed.",
+                "needs_approval": False,
+            }
         except (SpendDeniedError, GatewayError, PolicyViolationError) as err:
-            return {"result": f"Spend denied: {err}"}
+            return {"result": f"Spend denied: {err}", "needs_approval": False}
 
     return request_node, complete_node
 
@@ -186,7 +194,7 @@ def build_langgraph_spend_graph(
     request_node, complete_node = build_langgraph_spend_nodes(wallet)
 
     def route_after_request(state: PaygraphSpendState) -> str:
-        if state.get("needs_approval"):
+        if state.get("needs_approval") and not state.get("result"):
             return "complete"
         return END
 
