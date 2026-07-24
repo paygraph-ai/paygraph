@@ -116,6 +116,8 @@ class X402Gateway(BaseGateway):
 
             tx_hash = ""
             network = ""
+            settled_amount_atomic: str | None = None
+            settled_amount_cents: int | None = None
 
             # Parse the base64-encoded payment-response header
             payment_header = response.headers.get("payment-response", "")
@@ -126,6 +128,16 @@ class X402Gateway(BaseGateway):
                         "transactionId", ""
                     )
                     network = settle.get("network", "")
+                    # x402 SettleResponse.amount is a string in the asset's
+                    # smallest atomic unit. USDC/USDT (the x402 default) have
+                    # 6 decimals, so 1 cent = 10_000 atomic units.
+                    raw_amount = settle.get("amount")
+                    if raw_amount is not None:
+                        settled_amount_atomic = str(raw_amount)
+                        try:
+                            settled_amount_cents = int(raw_amount) // 10_000
+                        except (TypeError, ValueError):
+                            settled_amount_cents = None
                 except Exception:
                     pass
 
@@ -140,6 +152,8 @@ class X402Gateway(BaseGateway):
                 status_code=response.status_code,
                 response_body=response.text,
                 content_type=response.headers.get("content-type", ""),
+                settled_amount_atomic=settled_amount_atomic,
+                settled_amount_cents=settled_amount_cents,
             )
 
     def execute(

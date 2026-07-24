@@ -63,6 +63,17 @@ class X402Result(SpendResult):
         status_code: HTTP status code of the response.
         response_body: Body of the HTTP response from the paid endpoint.
         content_type: Content-Type header of the response.
+        settled_amount_atomic: Actual settled amount from the x402 settle
+            response header, in the asset's smallest atomic unit (e.g. USDC
+            has 6 decimals, so ``"100000"`` = $0.10). ``None`` when the
+            settle payload did not include an amount (older facilitators).
+        settled_amount_cents: The settled amount converted to cents when the
+            asset's decimals are known. ``None`` when the conversion could
+            not be performed with confidence — callers should treat this as
+            "settled amount not verified" and rely on ``amount_cents`` (the
+            requested amount) for accounting. When set and different from
+            ``amount_cents``, the wallet uses this value for budget commit
+            and audit.
     """
 
     url: str = ""
@@ -72,6 +83,8 @@ class X402Result(SpendResult):
     status_code: int = 200
     response_body: str = ""
     content_type: str = "application/json"
+    settled_amount_atomic: str | None = None
+    settled_amount_cents: int | None = None
 
 
 # Deprecated aliases — kept for one release cycle
