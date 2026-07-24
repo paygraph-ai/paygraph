@@ -19,6 +19,7 @@ from langgraph.types import Command  # noqa: E402
 
 from paygraph.gateways.mock import MockGateway  # noqa: E402
 from paygraph.gateways.slack import SlackApprovalGateway  # noqa: E402
+from paygraph.listeners.slack import SlackListener  # noqa: E402
 from paygraph.policy import SpendPolicy  # noqa: E402
 from paygraph.wallet import AgentWallet  # noqa: E402
 
@@ -348,3 +349,182 @@ class TestLangGraphSpendGraph:
         assert "Spend denied" in final["result"]
         records = _read_audit(audit_path)
         assert any(r["policy_result"] == "denied" for r in records)
+
+    def test_completed_thread_does_not_reenter_complete(self):
+        """A finished thread must not route back to complete on re-invoke."""
+        wallet, _ = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        config = {"configurable": {"thread_id": "g-reuse"}}
+
+        with patch("httpx.post"):
+            graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            graph.invoke(Command(resume={"approved": True}), config=config)
+            follow_up = graph.invoke(
+                {
+                    "amount": 10.0,
+                    "vendor": "OpenAI",
+                    "justification": "more tokens",
+                },
+                config=config,
+            )
+
+        assert "Card approved" in follow_up["result"]
+        assert graph.get_state(config).next == ()
+        assert follow_up.get("needs_approval") is not True
+
+    def test_slack_listener_then_command_resume_does_not_crash(self):
+        """SlackListener approval followed by Command(resume) is idempotent."""
+        wallet, audit_path = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        listener = SlackListener(signing_secret="test-secret")
+        listener.register(wallet)
+        config = {"configurable": {"thread_id": "g-slack-cmd"}}
+
+        with patch("httpx.post"):
+            paused = graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            request_id = paused["request_id"]
+            slack_result = listener.handle_payload(
+                {
+                    "type": "block_actions",
+                    "actions": [
+                        {
+                            "action_id": "approve",
+                            "value": request_id,
+                            "type": "button",
+                        }
+                    ],
+                }
+            )
+            assert slack_result["ok"] is True
+            final = graph.invoke(Command(resume={"approved": True}), config=config)
+
+        assert final.get("needs_approval") is not True
+        assert graph.get_state(config).next == ()
+        records = _read_audit(audit_path)
+        assert sum(1 for r in records if r["policy_result"] == "approved") == 1
+
+
+class TestLangGraphSpendGraphE2E:
+    """End-to-end acceptance tests for issue #21 criteria on the two-node graph."""
+
+    def _build_graph(self, wallet):
+        from paygraph.integrations.langgraph import build_langgraph_spend_graph
+
+        return build_langgraph_spend_graph(wallet)
+
+    def test_pause_resume_approve_audit_and_checkpoint(self):
+        """Pauses at node boundary, resumes with decision, logs audit, persists request_id."""
+        wallet, audit_path = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        config = {"configurable": {"thread_id": "e2e-approve"}}
+
+        with patch("httpx.post") as mock_post:
+            paused = graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            assert mock_post.call_count == 1
+            assert graph.get_state(config).next == ("complete",)
+
+            request_id = paused["request_id"]
+            checkpoint = graph.get_state(config)
+            assert checkpoint.values["request_id"] == request_id
+
+            final = graph.invoke(Command(resume={"approved": True}), config=config)
+            assert mock_post.call_count == 1
+
+        assert "Card approved" in final["result"]
+        records = _read_audit(audit_path)
+        approved = [r for r in records if r["policy_result"] == "approved"]
+        assert len(approved) == 1
+        assert approved[0]["vendor"] == "Anthropic"
+        assert approved[0]["amount"] == 50.0
+
+    def test_slack_listener_end_to_end_approval(self):
+        """SlackListener button click completes the spend without Command(resume)."""
+        wallet, audit_path = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        listener = SlackListener(signing_secret="test-secret")
+        listener.register(wallet)
+        config = {"configurable": {"thread_id": "e2e-slack"}}
+
+        with patch("httpx.post"):
+            paused = graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            result = listener.handle_payload(
+                {
+                    "type": "block_actions",
+                    "actions": [
+                        {
+                            "action_id": "approve",
+                            "value": paused["request_id"],
+                            "type": "button",
+                        }
+                    ],
+                }
+            )
+
+        assert result["ok"] is True
+        assert result["approved"] is True
+        records = _read_audit(audit_path)
+        assert any(r["policy_result"] == "approved" for r in records)
+        assert wallet.find_pending_approval(paused["request_id"]) is None
+
+    def test_slack_listener_then_graph_resume_is_safe(self):
+        """SlackListener resolves first; graph resume returns without double-approve."""
+        wallet, audit_path = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        listener = SlackListener(signing_secret="test-secret")
+        listener.register(wallet)
+        config = {"configurable": {"thread_id": "e2e-both-paths"}}
+
+        with patch("httpx.post"):
+            paused = graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            listener.handle_payload(
+                {
+                    "type": "block_actions",
+                    "actions": [
+                        {
+                            "action_id": "approve",
+                            "value": paused["request_id"],
+                            "type": "button",
+                        }
+                    ],
+                }
+            )
+            final = graph.invoke(Command(resume={"approved": True}), config=config)
+
+        assert "already completed" in final["result"].lower()
+        records = _read_audit(audit_path)
+        assert sum(1 for r in records if r["policy_result"] == "approved") == 1
