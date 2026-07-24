@@ -5,37 +5,30 @@ spend needs a human decision. That works in any Python runtime, but inside a
 LangGraph agent it blows past the node boundary — the checkpointer never
 persists the pause, so a cold restart can't resume cleanly.
 
-This module maps the exception onto LangGraph's native ``interrupt()``
-primitive so the graph pauses *at a node boundary*, the ``request_id`` lives in
-the checkpointed interrupt payload, and resume is the standard
-``graph.invoke(Command(resume=...), config)`` pattern.
+Two integration styles are provided:
+
+``build_langgraph_spend_tool`` (single-node)
+    Maps ``HumanApprovalRequired`` onto LangGraph's ``interrupt()`` inside one
+    tool call. Simple to wire into existing ReAct agents, but LangGraph re-runs
+    the node body on resume so ``request_spend`` executes twice — a second Slack
+    post and an orphaned ``request_id``. Acceptable for demos; not recommended
+    for production Slack flows.
+
+``build_langgraph_spend_graph`` (two-node, recommended)
+    Splits the flow into ``request`` and ``complete`` nodes with
+    ``interrupt_before=["complete"]``. ``request_spend`` runs exactly once;
+    the graph pauses before ``complete_spend``, so resume does not re-check
+    policy or post a second Slack message. Use this with ``SlackListener`` or
+    ``Command(resume=...)``.
 
 Resume payload shape::
 
     Command(resume={"approved": True})   # or False to deny
-
-Caveat — LangGraph re-runs the node body from the top on resume, so any work
-done *before* ``interrupt()`` (in our case ``wallet.request_spend``) runs twice.
-The second call generates a fresh ``request_id`` and posts a second Slack
-message; ``interrupt()`` then returns the human's decision immediately and the
-fresh ``request_id`` is the one that gets completed. The first ``request_id``
-is orphaned in the gateway's pending dict but not charged. The orphan is bounded
-in memory by ``SlackApprovalGateway``'s TTL on pending approvals (24h default),
-so it eventually auto-expires. For strict single-post semantics, split the flow
-into two nodes with ``interrupt_before`` on the resume node.
-
-Known limitations (v1 — tracked for follow-up):
-
-* **Policy re-checked on resume.** If the daily budget is exhausted while the
-  graph is paused, the replayed ``request_spend`` raises ``PolicyViolationError``
-  and an explicit ``Command(resume={"approved": True})`` is ignored.
-* **SlackListener vs Command(resume).** Use one resume path, not both. If
-  ``SlackListener`` completes the first ``request_id`` via a button click and
-  the graph is later resumed with ``Command(resume=...)``, a second card can
-  be issued for the replayed ``request_id``.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, TypedDict
 
 from paygraph.exceptions import (
     GatewayError,
@@ -43,6 +36,21 @@ from paygraph.exceptions import (
     PolicyViolationError,
     SpendDeniedError,
 )
+
+if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
+
+class PaygraphSpendState(TypedDict, total=False):
+    """State schema for :func:`build_langgraph_spend_graph`."""
+
+    amount: float
+    vendor: str
+    justification: str
+    request_id: str
+    gateway_name: str
+    needs_approval: bool
+    result: str
 
 
 def _coerce_approved(human_decision) -> bool:
@@ -54,14 +62,159 @@ def _coerce_approved(human_decision) -> bool:
     return False
 
 
+def _approval_interrupt_payload(
+    *,
+    request_id: str,
+    gateway_name: str,
+    amount: float,
+    vendor: str,
+    justification: str,
+) -> dict:
+    return {
+        "type": "paygraph_approval_required",
+        "request_id": request_id,
+        "gateway_name": gateway_name,
+        "amount": amount,
+        "vendor": vendor,
+        "justification": justification,
+    }
+
+
+def build_langgraph_spend_nodes(wallet):
+    """Build request/complete node callables for a two-node approval graph.
+
+    Use with :func:`build_langgraph_spend_graph` or wire into a larger graph.
+    The ``request`` node calls ``wallet.request_spend()`` once. When human
+    approval is required it stores ``request_id`` in state instead of raising.
+    The ``complete`` node calls ``interrupt()`` then ``wallet.complete_spend()``.
+
+    Args:
+        wallet: An ``AgentWallet`` instance.
+
+    Returns:
+        ``(request_node, complete_node)`` callables typed for
+        :class:`PaygraphSpendState`.
+
+    Raises:
+        ImportError: If ``langgraph`` is not installed.
+    """
+    try:
+        from langgraph.types import interrupt
+    except ImportError as e:
+        raise ImportError(
+            "LangGraph interrupt integration requires langgraph. "
+            "Install with: pip install paygraph[langgraph]"
+        ) from e
+
+    def request_node(state: PaygraphSpendState) -> dict:
+        if state.get("result"):
+            return {}
+        try:
+            result = wallet.request_spend(
+                state["amount"], state["vendor"], state["justification"]
+            )
+            return {"result": result}
+        except HumanApprovalRequired as e:
+            return {
+                "request_id": e.request_id,
+                "gateway_name": e.gateway_name,
+                "amount": e.amount,
+                "vendor": e.vendor,
+                "justification": state["justification"],
+                "needs_approval": True,
+            }
+        except (PolicyViolationError, SpendDeniedError, GatewayError) as err:
+            return {"result": f"Spend denied: {err}"}
+
+    def complete_node(state: PaygraphSpendState) -> dict:
+        if not state.get("needs_approval"):
+            return {}
+        human_decision = interrupt(
+            _approval_interrupt_payload(
+                request_id=state["request_id"],
+                gateway_name=state["gateway_name"],
+                amount=state["amount"],
+                vendor=state["vendor"],
+                justification=state["justification"],
+            )
+        )
+        approved = _coerce_approved(human_decision)
+        try:
+            result = wallet.complete_spend(
+                state["request_id"],
+                approved=approved,
+                gateway=state["gateway_name"],
+            )
+            return {"result": result}
+        except (SpendDeniedError, GatewayError, PolicyViolationError) as err:
+            return {"result": f"Spend denied: {err}"}
+
+    return request_node, complete_node
+
+
+def build_langgraph_spend_graph(
+    wallet,
+    *,
+    checkpointer: BaseCheckpointSaver | None = None,
+):
+    """Build a checkpointed two-node graph for Slack approval flows.
+
+  ``request_spend`` runs in the first node; the graph pauses before
+    ``complete_spend`` via ``interrupt_before``. This avoids the re-run
+    caveats of :func:`build_langgraph_spend_tool`.
+
+    Args:
+        wallet: An ``AgentWallet`` instance.
+        checkpointer: LangGraph checkpointer (required for pause/resume).
+            Defaults to ``InMemorySaver()`` when ``None``.
+
+    Returns:
+        A compiled ``StateGraph`` ready to ``invoke()``.
+
+    Raises:
+        ImportError: If ``langgraph`` is not installed.
+    """
+    try:
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.graph import END, START, StateGraph
+    except ImportError as e:
+        raise ImportError(
+            "LangGraph interrupt integration requires langgraph. "
+            "Install with: pip install paygraph[langgraph]"
+        ) from e
+
+    request_node, complete_node = build_langgraph_spend_nodes(wallet)
+
+    def route_after_request(state: PaygraphSpendState) -> str:
+        if state.get("needs_approval"):
+            return "complete"
+        return END
+
+    builder = StateGraph(PaygraphSpendState)
+    builder.add_node("request", request_node)
+    builder.add_node("complete", complete_node)
+    builder.add_edge(START, "request")
+    builder.add_conditional_edges(
+        "request", route_after_request, {"complete": "complete", END: END}
+    )
+    builder.add_edge("complete", END)
+
+    if checkpointer is None:
+        checkpointer = InMemorySaver()
+
+    return builder.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["complete"],
+    )
+
+
 def build_langgraph_spend_tool(wallet):
     """Build a LangGraph-native spend tool that pauses via ``interrupt()``.
 
     Parallel to ``wallet.spend_tool`` but integrates with LangGraph's
     checkpointer instead of surfacing ``HumanApprovalRequired`` as a string to
-    the LLM. Use this when the wallet's gateway is a ``SlackApprovalGateway``
-    (or any gateway that raises ``HumanApprovalRequired``) and the agent runs
-    inside a checkpoint-enabled LangGraph graph.
+    the LLM. Prefer :func:`build_langgraph_spend_graph` for production Slack
+    flows — this single-node helper re-runs ``request_spend`` on resume.
 
     Args:
         wallet: An ``AgentWallet`` instance.
@@ -105,14 +258,13 @@ def build_langgraph_spend_tool(wallet):
             return wallet.request_spend(amount, vendor, justification)
         except HumanApprovalRequired as e:
             human_decision = interrupt(
-                {
-                    "type": "paygraph_approval_required",
-                    "request_id": e.request_id,
-                    "gateway_name": e.gateway_name,
-                    "amount": e.amount,
-                    "vendor": e.vendor,
-                    "justification": justification,
-                }
+                _approval_interrupt_payload(
+                    request_id=e.request_id,
+                    gateway_name=e.gateway_name,
+                    amount=e.amount,
+                    vendor=e.vendor,
+                    justification=justification,
+                )
             )
             approved = _coerce_approved(human_decision)
             try:

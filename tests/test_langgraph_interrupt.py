@@ -235,3 +235,116 @@ class TestLangGraphSpendTool:
         assert "Spend denied" in final["result"]
         records = _read_audit(audit_path)
         assert any(r["policy_result"] == "denied" for r in records)
+
+
+class TestLangGraphSpendGraph:
+    def _build_graph(self, wallet):
+        from paygraph.integrations.langgraph import build_langgraph_spend_graph
+
+        return build_langgraph_spend_graph(wallet)
+
+    def test_below_threshold_completes_without_pause(self):
+        wallet, _ = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        config = {"configurable": {"thread_id": "g-below"}}
+
+        final = graph.invoke(
+            {"amount": 10.0, "vendor": "Anthropic", "justification": "tokens"},
+            config=config,
+        )
+
+        assert "Card approved" in final["result"]
+        assert graph.get_state(config).next == ()
+
+    def test_above_threshold_pauses_before_complete_node(self):
+        wallet, _ = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        config = {"configurable": {"thread_id": "g-pause"}}
+
+        with patch("httpx.post"):
+            state = graph.invoke(
+                {"amount": 50.0, "vendor": "Anthropic", "justification": "tokens"},
+                config=config,
+            )
+
+        assert state["request_id"]
+        assert state["needs_approval"] is True
+        assert graph.get_state(config).next == ("complete",)
+
+    def test_resume_posts_slack_once(self):
+        """request_spend must not re-run on resume (single Slack post)."""
+        wallet, _ = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        config = {"configurable": {"thread_id": "g-single-post"}}
+
+        with patch("httpx.post") as mock_post:
+            graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            assert mock_post.call_count == 1
+            final = graph.invoke(Command(resume={"approved": True}), config=config)
+            assert mock_post.call_count == 1
+
+        assert "Card approved" in final["result"]
+
+    def test_resume_approved_after_budget_exhausted(self):
+        """complete_spend does not re-evaluate policy — pending approval still completes."""
+        f = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
+        f.close()
+        wallet = AgentWallet(
+            gateways={
+                "default": SlackApprovalGateway(
+                    webhook_url="https://hooks.slack.com/test",
+                    inner_gateway=MockGateway(auto_approve=True),
+                ),
+            },
+            policy=SpendPolicy(
+                daily_budget=100.0,
+                require_human_approval_above=20.0,
+            ),
+            log_path=f.name,
+            verbose=False,
+        )
+        graph = self._build_graph(wallet)
+        config = {"configurable": {"thread_id": "g-budget"}}
+
+        with patch("httpx.post"):
+            graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            wallet.policy_engine.commit_spend(100.0)
+            final = graph.invoke(Command(resume={"approved": True}), config=config)
+
+        assert "Card approved" in final["result"]
+        records = _read_audit(f.name)
+        assert any(r["policy_result"] == "approved" for r in records)
+
+    def test_resume_denied_logs_denial(self):
+        wallet, audit_path = _make_wallet_with_slack()
+        graph = self._build_graph(wallet)
+        config = {"configurable": {"thread_id": "g-deny"}}
+
+        with patch("httpx.post"):
+            graph.invoke(
+                {
+                    "amount": 50.0,
+                    "vendor": "Anthropic",
+                    "justification": "need tokens",
+                },
+                config=config,
+            )
+            final = graph.invoke(Command(resume={"approved": False}), config=config)
+
+        assert "Spend denied" in final["result"]
+        records = _read_audit(audit_path)
+        assert any(r["policy_result"] == "denied" for r in records)
