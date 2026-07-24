@@ -23,6 +23,16 @@ is orphaned in the gateway's pending dict but not charged. The orphan is bounded
 in memory by ``SlackApprovalGateway``'s TTL on pending approvals (24h default),
 so it eventually auto-expires. For strict single-post semantics, split the flow
 into two nodes with ``interrupt_before`` on the resume node.
+
+Known limitations (v1 — tracked for follow-up):
+
+* **Policy re-checked on resume.** If the daily budget is exhausted while the
+  graph is paused, the replayed ``request_spend`` raises ``PolicyViolationError``
+  and an explicit ``Command(resume={"approved": True})`` is ignored.
+* **SlackListener vs Command(resume).** Use one resume path, not both. If
+  ``SlackListener`` completes the first ``request_id`` via a button click and
+  the graph is later resumed with ``Command(resume=...)``, a second card can
+  be issued for the replayed ``request_id``.
 """
 
 from __future__ import annotations
@@ -33,6 +43,15 @@ from paygraph.exceptions import (
     PolicyViolationError,
     SpendDeniedError,
 )
+
+
+def _coerce_approved(human_decision) -> bool:
+    """Return True only for explicit boolean approval in the resume payload."""
+    if isinstance(human_decision, bool):
+        return human_decision
+    if isinstance(human_decision, dict):
+        return human_decision.get("approved") is True
+    return False
 
 
 def build_langgraph_spend_tool(wallet):
@@ -95,11 +114,7 @@ def build_langgraph_spend_tool(wallet):
                     "justification": justification,
                 }
             )
-            approved = (
-                bool(human_decision.get("approved", False))
-                if isinstance(human_decision, dict)
-                else bool(human_decision)
-            )
+            approved = _coerce_approved(human_decision)
             try:
                 return wallet.complete_spend(
                     e.request_id, approved=approved, gateway=e.gateway_name
