@@ -27,11 +27,20 @@ class MockNanoGateway(BaseGateway):
         self,
         auto_approve: bool = False,
         sender: str = "nano_3mockp3141592653589793238464626433832795gu3k3z",
+        default_receiver: str = "",
     ) -> None:
         if not sender.startswith("nano_") and not sender.startswith("xrb_"):
             raise ValueError("sender must be a nano_ or xrb_ address")
+        if default_receiver and not (
+            default_receiver.startswith("nano_")
+            or default_receiver.startswith("xrb_")
+        ):
+            raise ValueError(
+                f"default_receiver must be a nano_ address, got {default_receiver!r}"
+            )
         self.auto_approve = auto_approve
         self.sender = sender
+        self.default_receiver = default_receiver
         self._sends: dict[str, NanoResult] = {}
 
     def execute(
@@ -40,7 +49,7 @@ class MockNanoGateway(BaseGateway):
         vendor: str,
         memo: str,
         *,
-        receiver: str,
+        receiver: str = "",
     ) -> NanoResult:
         """Simulate sending XNO to ``receiver``, optionally prompting for approval.
 
@@ -48,7 +57,8 @@ class MockNanoGateway(BaseGateway):
             amount_cents: Spend amount in cents.
             vendor: Name of the vendor.
             memo: Justification for the send.
-            receiver: The ``nano_...`` address to send XNO to.
+            receiver: The ``nano_...`` address to send XNO to. Defaults to
+                ``default_receiver`` from the constructor when omitted.
 
         Returns:
             A ``NanoResult`` with a fake ``block_hash``.
@@ -57,6 +67,8 @@ class MockNanoGateway(BaseGateway):
             ValueError: If ``receiver`` is not a ``nano_`` address.
             SpendDeniedError: If the human denies the approval prompt.
         """
+        if not receiver:
+            receiver = self.default_receiver
         if not receiver.startswith("nano_") and not receiver.startswith("xrb_"):
             raise ValueError(f"receiver must be a nano_ address, got {receiver!r}")
 

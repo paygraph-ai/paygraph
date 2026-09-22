@@ -61,6 +61,7 @@ class NanoGateway(BaseGateway):
         self,
         seed: str,
         rpc_url: str = "https://rpc.nano.to",
+        default_receiver: str = "",
     ) -> None:
         if not seed or len(seed) != 64:
             raise ValueError("Nano seed must be a 64-character hex string")
@@ -75,8 +76,17 @@ class NanoGateway(BaseGateway):
 
         from nanopy.rpc import HTTP
 
+        if default_receiver and not (
+            default_receiver.startswith("nano_")
+            or default_receiver.startswith("xrb_")
+        ):
+            raise ValueError(
+                f"default_receiver must be a nano_ address, got {default_receiver!r}"
+            )
+
         self._seed = seed
         self._rpc = HTTP(rpc_url)
+        self._default_receiver = default_receiver
         self._account = nanopy.Account()
         self._account.sk = nanopy.deterministic_key(seed)
 
@@ -91,7 +101,7 @@ class NanoGateway(BaseGateway):
         vendor: str,
         memo: str,
         *,
-        receiver: str,
+        receiver: str = "",
         amount_xno: float | None = None,
         work: str = "",
     ) -> NanoResult:
@@ -109,7 +119,9 @@ class NanoGateway(BaseGateway):
                 not given).
             vendor: Name of the vendor or service.
             memo: Justification for the send.
-            receiver: The ``nano_...`` address to send XNO to.
+            receiver: The ``nano_...`` address to send XNO to. Defaults to
+                ``default_receiver`` from the constructor when omitted, so
+                the gateway works through ``AgentWallet.request_spend``.
             amount_xno: Exact XNO amount to send. When omitted, the cents
                 amount is interpreted as XNO micro-units (1 cent -> 0.01
                 XNO) for a convenient default.
@@ -123,7 +135,10 @@ class NanoGateway(BaseGateway):
         Raises:
             GatewayError: If the send block could not be built or broadcast
                 (insufficient balance, node error, or no block hash).
+            ValueError: If no ``receiver`` and no ``default_receiver`` is set.
         """
+        if not receiver:
+            receiver = self._default_receiver
         if not receiver.startswith("nano_") and not receiver.startswith("xrb_"):
             raise ValueError(f"receiver must be a nano_ address, got {receiver!r}")
 
