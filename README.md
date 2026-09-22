@@ -144,6 +144,49 @@ print(result)  # SPT approved. Token: spt_... (spend limit: $4.20)
 | `currency`            | `str`  | `"usd"`  | ISO currency code                                    |
 | `expires_in_seconds`  | `int`  | `3600`   | Token lifetime from issuance in seconds              |
 
+## Nano Gateway (Settle in XNO)
+
+For vendors that accept Nano (XNO) directly, use `NanoGateway` to settle the
+spend on-chain — no card network, no x402 facilitator involved. Nano has no
+transaction fees and confirms in about half a second.
+
+```bash
+pip install paygraph[nano]
+```
+
+```python
+from paygraph import AgentWallet, NanoGateway, SpendPolicy
+
+wallet = AgentWallet(
+    gateways=NanoGateway(seed="0x...64-hex-seed..."),  # agent's own Nano account
+    policy=SpendPolicy(max_transaction=0.05),
+)
+
+result = wallet.request_spend(
+    amount=0.01,
+    vendor="ExampleAPI",
+    justification="Pay a per-call Nano price.",
+    gateway="default",
+)
+# Spend approved. Ref: <nano block hash>
+```
+
+`NanoGateway` fetches the sender's on-chain state, builds and signs a send
+block to the vendor's `nano_...` address, and returns the on-chain block hash
+as the refund reference. Pass a precomputed `work` value via `execute(...,
+work=...)` to avoid blocking on local proof-of-work generation.
+
+For testing without a node or wallet, use `MockNanoGateway`:
+
+```python
+from paygraph import AgentWallet, MockNanoGateway, SpendPolicy
+
+wallet = AgentWallet(
+    gateways=MockNanoGateway(auto_approve=True),
+    policy=SpendPolicy(max_transaction=25.0),
+)
+```
+
 ## x402 Gateway (Pay APIs with USDC)
 
 x402 is an HTTP 402-based protocol for machine-to-machine payments. Instead of minting a card, the gateway makes an HTTP request, handles the 402→sign→retry cycle on-chain, and returns the API response.
