@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import tempfile
 
@@ -417,3 +418,206 @@ class TestX402GatewayHeaderParsing:
         assert result.settled_amount_atomic == "2500000"
         assert result.settled_amount_cents == 250
         assert result.transaction_hash == "0xhash"
+
+
+# ---------------------------------------------------------------------------
+# Pre-signing cap: x402 requirement must not exceed the approved amount (#43)
+# ---------------------------------------------------------------------------
+
+BASE_SEPOLIA = "eip155:84532"
+BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+PAY_TO = "0x209693Bc6afc0C5328bA36FaF03C514EF312287C"
+
+
+def _requirement(amount_atomic: str, asset: str = BASE_SEPOLIA_USDC, network=BASE_SEPOLIA):
+    from x402 import PaymentRequirements
+
+    return PaymentRequirements(
+        scheme="exact",
+        network=network,
+        asset=asset,
+        amount=amount_atomic,
+        pay_to=PAY_TO,
+        max_timeout_seconds=60,
+        extra={"name": "USDC", "version": "2"},
+    )
+
+
+class _X402Server:
+    """httpx handler emulating an x402 endpoint that quotes fixed requirements."""
+
+    def __init__(self, accepts):
+        self.accepts = accepts
+        self.requests = []
+
+    def __call__(self, request):
+        import httpx
+        from x402 import PaymentRequired
+        from x402.http.utils import encode_payment_required_header
+
+        self.requests.append(request)
+        if "payment-signature" not in request.headers:
+            required = PaymentRequired(accepts=self.accepts)
+            return httpx.Response(
+                402, headers={"PAYMENT-REQUIRED": encode_payment_required_header(required)}
+            )
+        settle = {"success": True, "transaction": "0xpaid", "network": BASE_SEPOLIA}
+        return httpx.Response(
+            200,
+            headers={
+                "payment-response": base64.b64encode(json.dumps(settle).encode()).decode(),
+                "content-type": "application/json",
+            },
+            text='{"ok": true}',
+        )
+
+    @property
+    def signed_requests(self):
+        return [r for r in self.requests if "payment-signature" in r.headers]
+
+
+@pytest.fixture
+def x402_env(monkeypatch):
+    """Real X402Gateway (random key) wired to an in-memory x402 server.
+
+    Returns a factory ``(accepts) -> (gateway, server, sign_calls)``;
+    ``sign_calls`` records every requirement the scheme was asked to sign.
+    """
+    pytest.importorskip("x402")
+    import httpx
+    from eth_account import Account
+
+    def factory(accepts):
+        server = _X402Server(accepts)
+        monkeypatch.setattr(
+            httpx, "AsyncHTTPTransport", lambda *a, **kw: httpx.MockTransport(server)
+        )
+        gw = X402Gateway(evm_private_key=Account.create().key.hex())
+        sign_calls = []
+        for schemes in gw._client._schemes.values():
+            for scheme in schemes.values():
+                original = scheme.create_payment_payload
+
+                def spy(requirements, *a, _orig=original, **kw):
+                    sign_calls.append(requirements)
+                    return _orig(requirements, *a, **kw)
+
+                monkeypatch.setattr(scheme, "create_payment_payload", spy)
+        return gw, server, sign_calls
+
+    return factory
+
+
+
+class TestX402ApprovedAmountCap:
+    def test_requirement_above_approved_amount_is_not_signed(self, x402_env):
+        # Approved $1.00, server quotes $1.50 (1_500_000 atomic USDC).
+        gw, server, sign_calls = x402_env([_requirement("1500000")])
+
+        with pytest.raises(RuntimeError, match="refused before signing"):
+            gw.execute(100, "PaidAPI", "data", url="https://api.example.com/paid")
+
+        assert sign_calls == []
+        assert server.signed_requests == []
+        assert len(server.requests) == 1
+
+    def test_wallet_raises_and_does_not_commit_budget(self, x402_env):
+        gw, server, sign_calls = x402_env([_requirement("1500000")])
+        wallet, path = _make_wallet(
+            x402_gateway=gw, policy=SpendPolicy(max_transaction=5.0, daily_budget=2.0)
+        )
+
+        with pytest.raises(GatewayError, match="refused before signing"):
+            wallet.request_x402("https://api.example.com/paid", 1.0, "PaidAPI", "data")
+
+        assert sign_calls == []
+        assert server.signed_requests == []
+        assert wallet.policy_engine._daily_spend == 0.0
+        records = _read_audit(path)
+        assert [r["policy_result"] for r in records] == ["denied"]
+        assert records[0]["gateway_ref"] is None
+
+    def test_async_path_also_enforces_cap(self, x402_env):
+        gw, server, sign_calls = x402_env([_requirement("50000000")])  # $50
+        wallet, _ = _make_wallet(x402_gateway=gw, policy=SpendPolicy(max_transaction=5.0))
+
+        with pytest.raises(GatewayError, match="refused before signing"):
+            asyncio.run(
+                wallet.request_x402_async(
+                    "https://api.example.com/paid", 1.0, "PaidAPI", "data"
+                )
+            )
+
+        assert sign_calls == []
+        assert server.signed_requests == []
+
+    def test_requirement_equal_to_approved_amount_is_paid(self, x402_env):
+        gw, server, sign_calls = x402_env([_requirement("1000000")])
+
+        result = gw.execute(100, "PaidAPI", "data", url="https://api.example.com/paid")
+
+        assert result.status_code == 200
+        assert result.transaction_hash == "0xpaid"
+        assert [r.amount for r in sign_calls] == ["1000000"]
+        assert len(server.signed_requests) == 1
+
+    def test_cheaper_acceptable_requirement_is_selected(self, x402_env):
+        gw, server, sign_calls = x402_env(
+            [_requirement("1500000"), _requirement("900000")]
+        )
+
+        gw.execute(100, "PaidAPI", "data", url="https://api.example.com/paid")
+
+        assert [r.amount for r in sign_calls] == ["900000"]
+
+    def test_unknown_asset_is_refused(self, x402_env):
+        # Unregistered token: can't be valued in USD, so refuse even a tiny amount.
+        unknown = "0x000000000000000000000000000000000000dEaD"
+        gw, server, sign_calls = x402_env([_requirement("1", asset=unknown)])
+
+        with pytest.raises(RuntimeError, match="refused before signing"):
+            gw.execute(100, "PaidAPI", "data", url="https://api.example.com/paid")
+
+        assert sign_calls == []
+        assert server.signed_requests == []
+
+    def test_cap_does_not_leak_between_requests(self, x402_env):
+        gw, server, sign_calls = x402_env([_requirement("750000")])
+
+        gw.execute(100, "PaidAPI", "data", url="https://api.example.com/paid")
+        with pytest.raises(RuntimeError, match="refused before signing"):
+            gw.execute(50, "PaidAPI", "data", url="https://api.example.com/paid")
+
+        assert [r.amount for r in sign_calls] == ["750000"]
+
+    def test_hook_aborts_when_selected_requirement_over_cap(self):
+        """Defense in depth: the before-payment hook rejects even if selection
+        somehow yields an over-cap requirement."""
+        pytest.importorskip("x402")
+        from types import SimpleNamespace
+
+        from x402 import AbortResult
+
+        from paygraph.gateways.x402 import _approved_cents
+
+        ctx = SimpleNamespace(selected_requirements=_requirement("1500000"))
+        token = _approved_cents.set(100)
+        try:
+            assert isinstance(X402Gateway._abort_if_over_cap(ctx), AbortResult)
+        finally:
+            _approved_cents.reset(token)
+        # No approved amount in scope → fail closed.
+        assert isinstance(X402Gateway._abort_if_over_cap(ctx), AbortResult)
+
+    def test_cap_respects_asset_decimals(self):
+        pytest.importorskip("x402")
+        from paygraph.gateways.x402 import _requirement_within_cap
+
+        # MegaUSD on MegaETH has 18 decimals: $1.00 == 10**18 atomic units.
+        mega = "0xFAfDdbb3FC7688494971a79cc65DCa3EF82079E7"
+        assert _requirement_within_cap(
+            _requirement(str(10**18), asset=mega, network="eip155:4326"), 100
+        )
+        assert not _requirement_within_cap(
+            _requirement(str(10**18 + 1), asset=mega, network="eip155:4326"), 100
+        )

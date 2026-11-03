@@ -1,12 +1,65 @@
 import asyncio
 import base64
 import concurrent.futures
+import contextvars
 import json
 
 from paygraph.gateways.base import BaseGateway, X402Result
 
 # Deprecated alias — kept for one release cycle
 X402Receipt = X402Result
+
+# Policy-approved amount (in cents) for the x402 request currently in flight.
+# Scoped per task so concurrent requests through one gateway can't see each
+# other's cap.
+_approved_cents: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "paygraph_x402_approved_cents", default=None
+)
+
+
+def _asset_decimals(network: str, asset: str) -> int | None:
+    """Return the decimals of a known x402 USD stablecoin, or ``None``.
+
+    Only assets registered in the x402 SDK as the default stablecoin for
+    their network are recognised. Anything else can't be valued in USD, so
+    callers must treat ``None`` as "not payable".
+    """
+    lookups = []
+    try:
+        from x402.mechanisms.evm.utils import get_asset_info as evm_asset_info
+        from x402.mechanisms.evm.v1.utils import get_asset_info as evm_v1_asset_info
+
+        lookups += [evm_asset_info, evm_v1_asset_info]
+    except ImportError:
+        pass
+    try:
+        from x402.mechanisms.svm.utils import get_asset_info as svm_asset_info
+
+        lookups.append(svm_asset_info)
+    except ImportError:
+        pass
+
+    for lookup in lookups:
+        try:
+            return int(lookup(network, asset)["decimals"])
+        except (ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
+def _requirement_within_cap(requirement, cap_cents: int) -> bool:
+    """True if ``requirement`` costs at most ``cap_cents`` in a known stablecoin."""
+    decimals = _asset_decimals(
+        getattr(requirement, "network", ""), getattr(requirement, "asset", "")
+    )
+    if decimals is None:
+        return False
+    try:
+        required_atomic = int(requirement.get_amount())
+    except (TypeError, ValueError):
+        return False
+    max_atomic = cap_cents * 10**decimals // 100
+    return 0 <= required_atomic <= max_atomic
 
 
 class X402Gateway(BaseGateway):
@@ -59,6 +112,41 @@ class X402Gateway(BaseGateway):
             if not evm_private_key:
                 self._payer = str(svm_signer.address)
 
+        self._client.register_policy(self._filter_requirements_over_cap)
+        self._client.on_before_payment_creation(self._abort_if_over_cap)
+
+    @staticmethod
+    def _filter_requirements_over_cap(version: int, requirements: list) -> list:
+        """x402 policy: drop requirements that exceed the approved amount.
+
+        Runs before the SDK selects a requirement, so a cheaper acceptable
+        option offered by the server can still be chosen.
+        """
+        cap_cents = _approved_cents.get()
+        if cap_cents is None:
+            return []
+        return [r for r in requirements if _requirement_within_cap(r, cap_cents)]
+
+    @staticmethod
+    def _abort_if_over_cap(context):
+        """x402 before-payment hook: final check on the selected requirement.
+
+        Runs after selection and before any payload is signed.
+        """
+        from x402 import AbortResult
+
+        cap_cents = _approved_cents.get()
+        selected = context.selected_requirements
+        if cap_cents is None or not _requirement_within_cap(selected, cap_cents):
+            return AbortResult(
+                reason=(
+                    f"x402 requirement of {selected.get_amount()} atomic units of "
+                    f"{selected.asset} on {selected.network} exceeds the "
+                    f"policy-approved amount of {cap_cents} cents"
+                )
+            )
+        return None
+
     async def execute_async(
         self,
         amount_cents: int,
@@ -90,19 +178,50 @@ class X402Gateway(BaseGateway):
             An ``X402Result`` with the response body and transaction details.
 
         Raises:
-            RuntimeError: If the x402 payment fails (still 402 after retry).
+            RuntimeError: If the x402 payment fails (still 402 after retry),
+                or the server's payment requirement exceeds ``amount_cents``
+                or uses an asset that can't be valued in USD. In that case
+                nothing is signed or sent.
         """
 
         from x402.http.clients import x402HttpxClient
 
-        async with x402HttpxClient(self._client) as http:
+        token = _approved_cents.set(amount_cents)
+        try:
+            return await self._request(
+                x402HttpxClient, amount_cents, url, method, headers, body
+            )
+        finally:
+            _approved_cents.reset(token)
+
+    async def _request(
+        self,
+        client_cls,
+        amount_cents: int,
+        url: str,
+        method: str,
+        headers: dict | None,
+        body: str | None,
+    ) -> X402Result:
+        from x402 import NoMatchingRequirementsError, PaymentAbortedError
+
+        async with client_cls(self._client) as http:
             req_kwargs: dict = {}
             if headers:
                 req_kwargs["headers"] = headers
             if body:
                 req_kwargs["content"] = body
 
-            response = await http.request(method, url, **req_kwargs)
+            try:
+                response = await http.request(method, url, **req_kwargs)
+            except Exception as e:
+                cause = e.__cause__ or e
+                if isinstance(cause, (NoMatchingRequirementsError, PaymentAbortedError)):
+                    raise RuntimeError(
+                        f"x402 payment refused before signing (approved amount: "
+                        f"{amount_cents} cents): {cause}"
+                    ) from e
+                raise
             await response.aread()
 
             # If still 402 after the SDK's retry, payment failed

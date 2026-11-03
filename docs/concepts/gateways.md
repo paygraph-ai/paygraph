@@ -103,6 +103,13 @@ gateway = X402Gateway(
 
 At least one key must be provided.
 
+`X402Gateway` never signs a payment above the policy-approved amount. Before
+signing, it drops any x402 payment requirement that costs more than the
+`amount` passed to `request_x402()`, or that uses an asset it can't value in
+USD (only stablecoins the x402 SDK registers for each network count). If no
+requirement is left, the request fails with a `GatewayError` and nothing is
+signed or sent.
+
 ### MockX402Gateway
 
 For testing x402 flows without blockchain access.
